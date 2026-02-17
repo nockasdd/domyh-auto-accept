@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.vsix
+
+# VS Code test
+.vscode-test/
+
+# Agent / DOMYH internal
+.agent/
+.domyh/
+.gemini/
+
+# IDE settings (optional, keep .vscode if needed)
+.vscode/
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Lock file (optional — remove this line if you want to track it)
+# package-lock.json

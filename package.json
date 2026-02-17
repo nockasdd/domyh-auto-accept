@@ -1,0 +1,227 @@
+{
+  "name": "domyh-auto-accept",
+  "displayName": "Domyh Auto Accept",
+  "description": "Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, VS Code Copilot",
+  "version": "1.0.0",
+  "publisher": "nockdev",
+  "icon": "resources/icons/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nockdev/domyh-auto-accept.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "auto-accept",
+    "antigravity",
+    "cursor",
+    "windsurf",
+    "trae",
+    "ai-agent",
+    "copilot",
+    "productivity"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "domyh-auto-accept.toggle",
+        "title": "Domyh Auto Accept: Toggle On/Off",
+        "icon": "$(symbol-event)"
+      },
+      {
+        "command": "domyh-auto-accept.start",
+        "title": "Domyh Auto Accept: Start"
+      },
+      {
+        "command": "domyh-auto-accept.stop",
+        "title": "Domyh Auto Accept: Stop"
+      },
+      {
+        "command": "domyh-auto-accept.openDashboard",
+        "title": "Domyh Auto Accept: Open Dashboard"
+      },
+      {
+        "command": "domyh-auto-accept.startQueue",
+        "title": "Domyh Auto Accept: Start Prompt Queue"
+      },
+      {
+        "command": "domyh-auto-accept.pauseQueue",
+        "title": "Domyh Auto Accept: Pause Queue"
+      },
+      {
+        "command": "domyh-auto-accept.resumeQueue",
+        "title": "Domyh Auto Accept: Resume Queue"
+      },
+      {
+        "command": "domyh-auto-accept.skipQueue",
+        "title": "Domyh Auto Accept: Skip Current Prompt"
+      },
+      {
+        "command": "domyh-auto-accept.stopQueue",
+        "title": "Domyh Auto Accept: Stop Queue"
+      },
+      {
+        "command": "domyh-auto-accept.resetRetry",
+        "title": "Domyh Auto Accept: Reset Retry Counter"
+      }
+    ],
+    "configuration": {
+      "title": "Domyh Auto Accept",
+      "properties": {
+        "domyh-auto-accept.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable auto-accept on startup"
+        },
+        "domyh-auto-accept.cdpPort": {
+          "type": "number",
+          "default": 0,
+          "description": "CDP port (0 = auto-detect from IDE)"
+        },
+        "domyh-auto-accept.pollFrequency": {
+          "type": "number",
+          "default": 800,
+          "minimum": 200,
+          "maximum": 5000,
+          "description": "Poll interval in ms (lower = faster accept, higher CPU)"
+        },
+        "domyh-auto-accept.bannedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional banned command patterns (regex)"
+        },
+        "domyh-auto-accept.autoAllowOutsideWorkspace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-allow agent to access files outside workspace"
+        },
+        "domyh-auto-accept.smartFocus": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-toggle based on focus context (terminal=ON, chat=OFF)"
+        },
+        "domyh-auto-accept.autoRetry.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-retry on 429/model overloaded errors"
+        },
+        "domyh-auto-accept.autoRetry.maxRetries": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Max retries within the death-loop window"
+        },
+        "domyh-auto-accept.autoRetry.windowSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "Death-loop detection window in seconds"
+        },
+        "domyh-auto-accept.autoRetry.cooldownSeconds": {
+          "type": "number",
+          "default": 120,
+          "description": "Cooldown after death-loop detection"
+        },
+        "domyh-auto-accept.schedule.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable prompt scheduler"
+        },
+        "domyh-auto-accept.schedule.mode": {
+          "type": "string",
+          "enum": [
+            "interval",
+            "daily",
+            "queue"
+          ],
+          "default": "interval",
+          "description": "Scheduler mode"
+        },
+        "domyh-auto-accept.schedule.value": {
+          "type": "string",
+          "default": "30",
+          "description": "Schedule value (minutes for interval, HH:MM for daily)"
+        },
+        "domyh-auto-accept.schedule.prompt": {
+          "type": "string",
+          "default": "Status report",
+          "description": "Default prompt text"
+        },
+        "domyh-auto-accept.schedule.prompts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Prompt queue (for queue mode)"
+        },
+        "domyh-auto-accept.schedule.queueMode": {
+          "type": "string",
+          "enum": [
+            "consume",
+            "loop"
+          ],
+          "default": "consume",
+          "description": "Queue behavior: consume (remove after done) or loop (repeat)"
+        },
+        "domyh-auto-accept.schedule.silenceTimeout": {
+          "type": "number",
+          "default": 30,
+          "description": "Silence detection timeout in seconds"
+        },
+        "domyh-auto-accept.debugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose debug logging"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "domyh-auto-accept.toggle",
+        "key": "ctrl+shift+alt+a"
+      },
+      {
+        "command": "domyh-auto-accept.openDashboard",
+        "key": "ctrl+shift+alt+d"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -noEmit && node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "lint": "eslint src --ext ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run compile && npx @vscode/vsce package --no-dependencies",
+    "prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.55.0",
+    "vitest": "^2.0.0"
+  }
+}

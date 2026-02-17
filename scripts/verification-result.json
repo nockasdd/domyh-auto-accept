@@ -1,0 +1,28 @@
+{
+  "isTop": true,
+  "isChatPanel": false,
+  "scanMode": "iframe-traverse",
+  "wouldClick": [
+    {
+      "branch": 3,
+      "tag": "SPAN",
+      "text": "accept all",
+      "cls": "hover:text-ide-button-hover-color hover:bg-ide-button-hover-background cursor-po",
+      "rect": {
+        "x": 517,
+        "y": 875,
+        "w": 59,
+        "h": 18
+      }
+    }
+  ],
+  "diffContainers": 0,
+  "iframesCanned": 1,
+  "chatIframesFound": 1,
+  "allButtonsInIframes": 47,
+  "branches": [
+    "Branch 3: iframe traversal",
+    "  iframe[0]: accessible, isChat=true, src=vscode-file://vscode-app/c%3A/Users/Pc/AppData/Local/Programs/Antigravity/resour",
+    "    [40] <SPAN> \"accept all\" inCode=false clickable=true rect={\"x\":517,\"y\":875,\"w\":59,\"h\":18}"
+  ]
+}

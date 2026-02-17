@@ -1,0 +1,517 @@
+{
+  "iframeCount": 1,
+  "acceptElements": [
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "reject all",
+      "directText": "reject all",
+      "ariaLabel": "",
+      "cls": "cursor-pointer select-none rounded px-1 text-sm opacity-50 hover:opacity-70",
+      "id": "",
+      "role": "",
+      "rect": {
+        "x": 457,
+        "y": 609,
+        "w": 55,
+        "h": 18
+      },
+      "visible": true,
+      "parents": [
+        {
+          "d": 0,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex flex-row items-center gap-1",
+          "role": ""
+        },
+        {
+          "d": 1,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex items-center",
+          "role": ""
+        },
+        {
+          "d": 2,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex flex-none items-center gap-1",
+          "role": ""
+        },
+        {
+          "d": 3,
+          "tag": "DIV",
+          "id": "",
+          "cls": "outline-solid relative z-20 flex min-h-[1.8rem] justify-betw",
+          "role": ""
+        },
+        {
+          "d": 4,
+          "tag": "DIV",
+          "id": "",
+          "cls": "relative flex flex-col",
+          "role": ""
+        },
+        {
+          "d": 5,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex grow flex-col justify-start gap-8",
+          "role": ""
+        },
+        {
+          "d": 6,
+          "tag": "DIV",
+          "id": "",
+          "cls": "relative flex flex-col gap-8 text-ide-message-block-bot-colo",
+          "role": ""
+        },
+        {
+          "d": 7,
+          "tag": "DIV",
+          "id": "conversation",
+          "cls": "flex w-full grow flex-col overflow-y-hidden overflow-x-clip ",
+          "role": ""
+        }
+      ]
+    },
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "accept all",
+      "directText": "accept all",
+      "ariaLabel": "",
+      "cls": "hover:text-ide-button-hover-color hover:bg-ide-button-hover-background cursor-pointer select-none rounded bg-ide-button-background px-1 text-sm text-ide-button-color",
+      "id": "",
+      "role": "",
+      "rect": {
+        "x": 517,
+        "y": 609,
+        "w": 59,
+        "h": 18
+      },
+      "visible": true,
+      "parents": [
+        {
+          "d": 0,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex flex-row items-center gap-1",
+          "role": ""
+        },
+        {
+          "d": 1,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex items-center",
+          "role": ""
+        },
+        {
+          "d": 2,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex flex-none items-center gap-1",
+          "role": ""
+        },
+        {
+          "d": 3,
+          "tag": "DIV",
+          "id": "",
+          "cls": "outline-solid relative z-20 flex min-h-[1.8rem] justify-betw",
+          "role": ""
+        },
+        {
+          "d": 4,
+          "tag": "DIV",
+          "id": "",
+          "cls": "relative flex flex-col",
+          "role": ""
+        },
+        {
+          "d": 5,
+          "tag": "DIV",
+          "id": "",
+          "cls": "flex grow flex-col justify-start gap-8",
+          "role": ""
+        },
+        {
+          "d": 6,
+          "tag": "DIV",
+          "id": "",
+          "cls": "relative flex flex-col gap-8 text-ide-message-block-bot-colo",
+          "role": ""
+        },
+        {
+          "d": 7,
+          "tag": "DIV",
+          "id": "conversation",
+          "cls": "flex w-full grow flex-col overflow-y-hidden overflow-x-clip ",
+          "role": ""
+        }
+      ]
+    }
+  ],
+  "allButtonLikeElements": [
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "",
+      "cls": "group relative flex cursor-pointer items-center justify-center",
+      "rect": {
+        "x": 551,
+        "y": 10,
+        "w": 16,
+        "h": 16
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "expand all",
+      "cls": "select-none opacity-50 hover:opacity-90 transition-opacity cursor-pointer flex i",
+      "rect": {
+        "x": 498,
+        "y": -721,
+        "w": 72,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "DIV",
+      "text": "",
+      "cls": "cursor-pointer opacity-50 hover:opacity-100 transition-opacity",
+      "rect": {
+        "x": 555,
+        "y": -453,
+        "w": 16,
+        "h": 16
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "thought for 2s",
+      "cls": "flex w-full items-center gap-2 text-left text-sm text-ide-text-color opacity-70 ",
+      "rect": {
+        "x": 16,
+        "y": -401,
+        "w": 563,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "relocate",
+      "cls": "cursor-pointer flex items-center gap-1 opacity-60 transition-opacity hover:opaci",
+      "rect": {
+        "x": 498,
+        "y": -99,
+        "w": 63,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "",
+      "cls": "flex h-5 w-5 cursor-pointer items-center justify-center rounded-sm bg-gray-800 p",
+      "rect": {
+        "x": 541,
+        "y": -68,
+        "w": 20,
+        "h": 20
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "always run",
+      "cls": "flex cursor-pointer items-center gap-1 rounded-sm px-1 py-0.5 text-sm hover:bg-g",
+      "rect": {
+        "x": 30,
+        "y": -39,
+        "w": 81,
+        "h": 22
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "cancel",
+      "cls": "cursor-pointer text-sm opacity-70 transition-opacity hover:opacity-100",
+      "rect": {
+        "x": 526,
+        "y": -37,
+        "w": 35,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "collapse all",
+      "cls": "select-none opacity-50 hover:opacity-90 transition-opacity cursor-pointer flex i",
+      "rect": {
+        "x": 492,
+        "y": 9,
+        "w": 78,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "open diff",
+      "cls": "select-none opacity-50 hover:opacity-90 transition-opacity cursor-pointer flex i",
+      "rect": {
+        "x": 505,
+        "y": -469,
+        "w": 50,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "go to terminal",
+      "cls": "cursor-pointer flex items-center gap-1 opacity-60 transition-opacity hover:opaci",
+      "rect": {
+        "x": 450,
+        "y": -430,
+        "w": 96,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "",
+      "cls": "flex h-5 w-5 cursor-pointer items-center justify-center rounded-sm bg-gray-800 p",
+      "rect": {
+        "x": 526,
+        "y": -399,
+        "w": 20,
+        "h": 20
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "always run",
+      "cls": "flex cursor-pointer items-center gap-1 rounded-sm px-1 py-0.5 text-sm hover:bg-g",
+      "rect": {
+        "x": 50,
+        "y": -170,
+        "w": 81,
+        "h": 22
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "open diff",
+      "cls": "select-none opacity-50 hover:opacity-90 transition-opacity cursor-pointer flex i",
+      "rect": {
+        "x": 505,
+        "y": 206,
+        "w": 50,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "relocate",
+      "cls": "cursor-pointer flex items-center gap-1 opacity-60 transition-opacity hover:opaci",
+      "rect": {
+        "x": 483,
+        "y": 245,
+        "w": 63,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "",
+      "cls": "flex h-5 w-5 cursor-pointer items-center justify-center rounded-sm bg-gray-800 p",
+      "rect": {
+        "x": 526,
+        "y": 276,
+        "w": 20,
+        "h": 20
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "always run",
+      "cls": "flex cursor-pointer items-center gap-1 rounded-sm px-1 py-0.5 text-sm hover:bg-g",
+      "rect": {
+        "x": 50,
+        "y": 485,
+        "w": 81,
+        "h": 22
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "cancel",
+      "cls": "cursor-pointer text-sm opacity-70 transition-opacity hover:opacity-100",
+      "rect": {
+        "x": 511,
+        "y": 487,
+        "w": 35,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "scroll to bottom",
+      "cls": "z-[100] absolute bottom-2 right-2 flex items-center gap-1 rounded-md border bord",
+      "rect": {
+        "x": 532,
+        "y": 493,
+        "w": 30,
+        "h": 22
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "DIV",
+      "text": "",
+      "cls": "absolute -bottom-0 -right-0 z-20 origin-center rounded-full transition-all durat",
+      "rect": {
+        "x": 42,
+        "y": 622,
+        "w": 0,
+        "h": 0
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "DIV",
+      "text": "",
+      "cls": "absolute -bottom-0 -right-0 z-20 origin-center rounded-full transition-all durat",
+      "rect": {
+        "x": 62,
+        "y": 622,
+        "w": 0,
+        "h": 0
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "DIV",
+      "text": "",
+      "cls": "absolute -bottom-0 -right-0 z-20 origin-center rounded-full transition-all durat",
+      "rect": {
+        "x": 58,
+        "y": 618,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "SPAN",
+      "text": "accept all",
+      "cls": "hover:text-ide-button-hover-color hover:bg-ide-button-hover-background cursor-po",
+      "rect": {
+        "x": 517,
+        "y": 609,
+        "w": 59,
+        "h": 18
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "DIV",
+      "text": "",
+      "cls": "",
+      "rect": {
+        "x": 15,
+        "y": 937,
+        "w": 24,
+        "h": 25
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "",
+      "cls": "p-1 rounded-full hover:bg-gray-500/20 cursor-pointer opacity-70",
+      "rect": {
+        "x": 15,
+        "y": 937,
+        "w": 24,
+        "h": 24
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "DIV",
+      "text": "planning",
+      "cls": "",
+      "rect": {
+        "x": 41,
+        "y": 937,
+        "w": 72,
+        "h": 25
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "planning",
+      "cls": "py-1 pl-1 pr-2 flex items-center gap-0.5 rounded-md hover:bg-gray-500/20 cursor-",
+      "rect": {
+        "x": 41,
+        "y": 937,
+        "w": 72,
+        "h": 25
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "claude opus 4.6 (thinking)",
+      "cls": "relative flex min-w-0 max-w-full cursor-pointer flex-row items-center justify-st",
+      "rect": {
+        "x": 115,
+        "y": 938,
+        "w": 161,
+        "h": 24
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "record voice memo",
+      "cls": "flex items-center justify-center p-1 rounded-full transition-colors hover:bg-gra",
+      "rect": {
+        "x": 511,
+        "y": 938,
+        "w": 24,
+        "h": 24
+      }
+    },
+    {
+      "iframe": 0,
+      "tag": "BUTTON",
+      "text": "",
+      "cls": "group !rounded-lg !px-1 cursor-pointer",
+      "rect": {
+        "x": 539,
+        "y": 938,
+        "w": 24,
+        "h": 24
+      }
+    }
+  ]
+}

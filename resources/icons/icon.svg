@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- White background -->
+  <rect width="256" height="256" rx="32" fill="#ffffff"/>
+
+  <!-- Checkmark (green, bold) -->
+  <polyline
+    points="72,140 108,176 184,96"
+    fill="none"
+    stroke="#22c55e"
+    stroke-width="20"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Mouse cursor (dark, overlapping checkmark) -->
+  <g transform="translate(140, 110)">
+    <path
+      d="M0,0 L0,56 L16,42 L28,64 L38,58 L26,36 L44,32 Z"
+      fill="#1e293b"
+      stroke="#ffffff"
+      stroke-width="3"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>

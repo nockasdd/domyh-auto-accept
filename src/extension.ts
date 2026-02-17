@@ -1,0 +1,284 @@
+/**
+ * Extension Entry Point — Domyh Auto Accept
+ *
+ * Bootstraps the IoC container, registers adapters, and starts the engine.
+ * Activation: onStartupFinished (no impact on IDE boot time).
+ *
+ * Multi-window: Each window runs independently. Commands API works in all windows.
+ * CDP supports multiple simultaneous clients (Chrome 63+), so no lock needed.
+ */
+
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import { container, Tokens } from './core/container';
+import { Logger } from './core/logger';
+import { ConfigReader } from './core/config';
+import { DisposableStore } from './core/disposable';
+import { TypedEventBus } from './application/event-bus';
+import { AutoAcceptEngine } from './application/engine';
+
+import { DeathLoopGuard } from './application/death-loop-guard';
+import { SmartFocus } from './application/smart-focus';
+import { Scheduler } from './application/scheduler';
+import { CDPConnector } from './infrastructure/cdp/connector';
+import { PayloadManager } from './infrastructure/cdp/payload-manager';
+import { IDEDetector } from './infrastructure/detection/ide-detector';
+import { IDEAdapterRegistry } from './infrastructure/adapters/registry';
+import { AntigravityAdapter } from './infrastructure/adapters/antigravity';
+import { CursorAdapter } from './infrastructure/adapters/cursor';
+import { WindsurfAdapter } from './infrastructure/adapters/windsurf';
+import { TraeAdapter } from './infrastructure/adapters/trae';
+import { VSCodeCopilotAdapter } from './infrastructure/adapters/vscode-copilot';
+import { StatusBar } from './presentation/status-bar';
+import { DashboardPanel } from './presentation/dashboard/panel';
+import { NotificationManager } from './presentation/notifications';
+import { IEventBus } from './domain/interfaces/event-bus';
+
+const disposables = new DisposableStore();
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // ── 1. Bootstrap core services ───────────────────
+  const logger = new Logger();
+  const config = new ConfigReader();
+  const eventBus = new TypedEventBus();
+  const fullConfig = config.getAll();
+
+  logger.setDebugMode(fullConfig.debugMode);
+  logger.info('Domyh Auto Accept activating...');
+
+  // Register core services in IoC
+  container.register(Tokens.Logger, () => logger);
+  container.register(Tokens.Config, () => config);
+  container.register(Tokens.EventBus, () => eventBus);
+
+  // ── 2. Detect IDE ────────────────────────────────
+  const detector = new IDEDetector();
+  const detection = detector.detect();
+  logger.info(`IDE detected: ${detection.ideType} (source: ${detection.source}, port: ${detection.defaultPort})`);
+  // ── 2b. First-install CDP auto-setup ────────────────
+  // On first install: patch argv.json + auto-restart IDE silently (no manual restart needed)
+  // Subsequent activations: skip entirely via globalState flag
+  const cdpSetupDone = context.globalState.get<boolean>('cdpSetupDone', false);
+  if (!cdpSetupDone) {
+    const { CDPSetup } = await import('./infrastructure/cdp/cdp-setup');
+    const { Relauncher } = await import('./infrastructure/cdp/relauncher');
+    const port = detection.defaultPort;
+    const cdpSetup = new CDPSetup(detection.ideType, port, logger);
+
+    if (!cdpSetup.isCDPConfigured()) {
+      logger.info('First install: patching argv.json for CDP...');
+      const result = await cdpSetup.enableCDP();
+      if (result.patched) {
+        logger.info(`First install: argv.json patched with port ${port}`);
+
+        // Check if we need to restart (no CDP flag in process.argv)
+        const relauncher = new Relauncher(logger, port);
+        if (!relauncher.hasFlag()) {
+          logger.info('First install: auto-restarting IDE with CDP flag...');
+          await context.globalState.update('cdpSetupDone', true);
+          await relauncher.relaunch();
+          return; // IDE is quitting — activation aborted
+        }
+      }
+    }
+
+    // Mark setup as done regardless
+    await context.globalState.update('cdpSetupDone', true);
+    logger.info('CDP first-install setup complete');
+  }
+
+  // ── 3. Register adapters ─────────────────────────
+  const registry = new IDEAdapterRegistry(logger);
+  registry.register(new AntigravityAdapter());
+  registry.register(new CursorAdapter());
+  registry.register(new WindsurfAdapter());
+  registry.register(new TraeAdapter());
+  registry.register(new VSCodeCopilotAdapter());
+  container.register(Tokens.IDERegistry, () => registry);
+
+  // Get adapter for detected IDE
+  const adapter = registry.get(detection.ideType);
+
+  if (!adapter) {
+    logger.warn(`No adapter for ${detection.ideType}. Extension will try generic commands.`);
+  }
+
+  // ── 4. Create infrastructure services ────────────
+  const cdp = new CDPConnector(logger);
+  const deathLoopGuard = new DeathLoopGuard(fullConfig.autoRetry, eventBus, logger);
+
+  // Load JS payloads
+  const payloads = new PayloadManager(logger);
+  const payloadDir = path.join(context.extensionPath, 'dist', 'payload');
+  const payloadNames = ['auto-accept', 'probe', 'send-prompt'];
+  for (const name of payloadNames) {
+    const filePath = path.join(payloadDir, `${name}.js`);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      payloads.register(name, content);
+    } catch {
+      logger.debug(`Payload file not found: ${filePath}`);
+    }
+  }
+
+  container.register(Tokens.CDPConnector, () => cdp);
+  container.register(Tokens.DeathLoopGuard, () => deathLoopGuard);
+
+  // Smart focus (optional)
+  let smartFocus: SmartFocus | null = null;
+  if (fullConfig.smartFocus) {
+    smartFocus = new SmartFocus(eventBus, logger);
+    smartFocus.start();
+    container.register(Tokens.SmartFocus, () => smartFocus!);
+  }
+
+  // ── 5. Create the engine ─────────────────────────
+  const fallbackAdapter = adapter ?? new AntigravityAdapter();
+  const engine = new AutoAcceptEngine(
+    fallbackAdapter,
+    cdp,
+    eventBus,
+    deathLoopGuard,
+    smartFocus,
+    payloads,
+    config,
+    logger,
+  );
+  container.register(Tokens.Engine, () => engine);
+
+  // ── 5b. Create the scheduler ────────────────────
+  const scheduler = new Scheduler(cdp, eventBus, payloads, config, logger);
+  container.register(Tokens.Scheduler, () => scheduler);
+
+  // ── 6. UI ────────────────────────────────────────
+  const statusBar = new StatusBar(eventBus);
+  disposables.add(statusBar);
+
+  // ── 7. Register commands ─────────────────────────
+  registerCommands(context, engine, scheduler, eventBus, logger);
+
+  // ── 8. Subscribe to config changes ───────────────
+  disposables.add(
+    config.onDidChange(() => {
+      const newConfig = config.getAll();
+      logger.setDebugMode(newConfig.debugMode);
+      logger.info('Configuration reloaded');
+    }),
+  );
+
+  // ── 9. Notifications (centralized) ──────────────
+  new NotificationManager(eventBus, logger, disposables);
+
+  // ── 10. Auto-start if enabled ────────────────────
+  // engine.start() auto-tries CDP on default port → falls back to Commands-only
+  if (fullConfig.enabled) {
+    await engine.start();
+  }
+
+  logger.info('Domyh Auto Accept activated ✓');
+
+  // ── Cleanup on deactivation ──────────────────────
+  context.subscriptions.push({
+    dispose: () => {
+      scheduler.dispose();
+      engine.dispose();
+      cdp.dispose();
+      deathLoopGuard.dispose();
+      smartFocus?.dispose();
+      eventBus.dispose();
+      disposables.dispose();
+      container.clear();
+      logger.info('Domyh Auto Accept deactivated');
+      logger.dispose();
+    },
+  });
+}
+
+export function deactivate(): void {
+  // Cleanup handled by context.subscriptions
+}
+
+// ── Command Registration ─────────────────────────────
+
+function registerCommands(
+  context: vscode.ExtensionContext,
+  engine: AutoAcceptEngine | null,
+  scheduler: Scheduler | null,
+  _eventBus: IEventBus,
+  _logger: Logger,
+): void {
+  const register = (id: string, handler: () => void | Promise<void>) => {
+    context.subscriptions.push(vscode.commands.registerCommand(id, handler));
+  };
+
+  register('domyh-auto-accept.toggle', async () => {
+    if (!engine) {
+      vscode.window.showWarningMessage('Auto Accept is in passive mode (another window is active).');
+      return;
+    }
+    const isRunning = await engine.toggle();
+    vscode.window.showInformationMessage(
+      `Auto Accept: ${isRunning ? 'ON ✅' : 'OFF ❌'}`,
+    );
+  });
+
+  register('domyh-auto-accept.start', async () => {
+    if (!engine) return;
+    await engine.start();
+    vscode.window.showInformationMessage('Auto Accept started ✅');
+  });
+
+  register('domyh-auto-accept.stop', async () => {
+    if (!engine) return;
+    await engine.stop();
+    vscode.window.showInformationMessage('Auto Accept stopped ❌');
+  });
+
+  register('domyh-auto-accept.resetRetry', () => {
+    if (container.has(Tokens.DeathLoopGuard)) {
+      container.resolve<DeathLoopGuard>(Tokens.DeathLoopGuard).reset();
+      vscode.window.showInformationMessage('Retry counter reset ✅');
+    }
+  });
+
+  register('domyh-auto-accept.openDashboard', () => {
+    DashboardPanel.createOrShow(context.extensionUri, _eventBus, {
+      stats: engine?.getStats(),
+      engineState: engine?.getState(),
+    });
+  });
+
+  // Queue commands — wired to Scheduler
+  register('domyh-auto-accept.startQueue', () => {
+    if (!scheduler) return;
+    scheduler.start();
+    vscode.window.showInformationMessage(
+      `Prompt queue started (${scheduler.queueLength} prompts) 📋`,
+    );
+  });
+  register('domyh-auto-accept.pauseQueue', () => {
+    if (!scheduler) return;
+    scheduler.pause();
+    vscode.window.showInformationMessage('Prompt queue paused ⏸️');
+  });
+  register('domyh-auto-accept.resumeQueue', () => {
+    if (!scheduler) return;
+    scheduler.resume();
+    vscode.window.showInformationMessage('Prompt queue resumed ▶️');
+  });
+  register('domyh-auto-accept.skipQueue', () => {
+    if (!scheduler) return;
+    scheduler.skip();
+    vscode.window.showInformationMessage(
+      `Skipped to prompt ${scheduler.currentIndex + 1}/${scheduler.queueLength} ⏭️`,
+    );
+  });
+  register('domyh-auto-accept.stopQueue', () => {
+    if (!scheduler) return;
+    scheduler.stop();
+    vscode.window.showInformationMessage('Prompt queue stopped ⏹️');
+  });
+}
+
+// ── Dashboard HTML ───────────────────────────────────
