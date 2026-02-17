@@ -29,6 +29,7 @@ var ACCEPT_WORDS = [
   'proceed', 'keep', 'keep all',
   'yes', 'ok',
   'run',
+  'retry', 'try again', 'continue',
 ];
 
 // Words that DISQUALIFY a button even if it contains accept words.

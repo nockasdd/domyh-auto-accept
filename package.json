@@ -3,12 +3,12 @@
   "displayName": "Domyh Auto Accept",
   "description": "Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, VS Code Copilot",
   "version": "1.0.0",
-  "publisher": "nockdev",
+  "publisher": "nockasdd",
   "icon": "resources/icons/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nockdev/domyh-auto-accept.git"
+    "url": "https://github.com/nockasdd/domyh-auto-accept.git"
   },
   "engines": {
     "vscode": "^1.85.0"
