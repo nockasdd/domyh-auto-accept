@@ -63,6 +63,12 @@ var DANGEROUS_COMMANDS = [
   'npm uninstall', 'pip uninstall', 'apt remove', 'apt purge',
 ];
 
+// ── Cursor Dialog Handling ────────────────────────
+var USAGE_LIMIT_COOLDOWN_MS = 30000;
+var USAGE_LIMIT_MAX_RETRIES = 3;
+var __usageLimitRetryCount = 0;
+var __lastUsageLimitResend = 0;
+
 // Selectors for actual UI action buttons — NOT generic spans or links
 var BUTTON_SELECTORS = [
   'button',
@@ -71,6 +77,11 @@ var BUTTON_SELECTORS = [
   '.bg-ide-button-background',
   'span[class*="bg-ide-button"]',
   'span.cursor-pointer',
+  // Cursor-specific: Anysphere buttons are <div> elements, not <button>
+  '.anysphere-text-button',
+  '.anysphere-secondary-button',
+  '.anysphere-focus-outline-button',
+  '[data-click-ready="true"]',
 ].join(', ');
 
 // ── TARGET CONTAINERS ────────────────────────────
@@ -81,6 +92,18 @@ var EDITOR_DIFF_SELECTORS = [
   '.modified-in-chat',
   '.inline-chat-widget',
   '.diff-review-widget',
+  // Cursor-specific: composer area where Keep/Accept/Run buttons live
+  '.composer-pane-controls-feedback',
+  '.composer-tool-call-control-row',
+  '.composer-single-file-block',
+  // Cursor-specific: editor-level diff review toolbar (Keep All, Undo All)
+  '.editor-group-container',
+  '.file-modifications-toolbar',
+  '.modifications-toolbar',
+  '.review-flow-wrapper',
+  // Cursor: top-level diff actions bar
+  '.diff-actions-bar',
+  '.diff-actions',
 ];
 
 // On the CHAT PANEL iframe, the real Antigravity panel body structure is:
@@ -415,8 +438,8 @@ function scanIframeDocuments() {
 
       // Check if this iframe is a chat panel (has #conversation or known markers)
       var isChat = !!doc.getElementById('conversation') ||
-                   !!doc.querySelector('.notify-user-container') ||
-                   !!doc.querySelector('[data-tooltip-id="cascade-header-menu"]');
+        !!doc.querySelector('.notify-user-container') ||
+        !!doc.querySelector('[data-tooltip-id="cascade-header-menu"]');
 
       if (!isChat) continue;
 
@@ -516,11 +539,85 @@ function clickScrollToBottomIfVisible(doc) {
   return false;
 }
 
+// ── Cursor Dialog Handling ───────────────────────
+
+/**
+ * Handle Cursor-specific dialogs BEFORE generic button scan.
+ * These dialogs have buttons that conflict with isAcceptButton() matching
+ * (e.g. both "Continue without reverting" and "Continue and revert" match "continue").
+ * We intercept them here and click the CORRECT button by CSS selector.
+ */
+function handleCursorDialogs() {
+  // ── Dialog A: "Submit from a previous message?" ──
+  var dialog = document.querySelector('.pretty-dialog-modal');
+  if (dialog) {
+    var title = dialog.querySelector('.pretty-dialog-title');
+    var titleText = title ? (title.textContent || '').toLowerCase() : '';
+
+    if (titleText.indexOf('previous message') !== -1 || titleText.indexOf('submit from') !== -1) {
+      // Click "Continue without reverting" — the SECONDARY button (not primary)
+      var continueBtn = dialog.querySelector('.anysphere-secondary-button.pretty-dialog-button');
+      if (continueBtn && isElementClickable(continueBtn)) {
+        continueBtn.click();
+        return { action: 'dialog-continue', dialogType: 'submit-previous' };
+      }
+    }
+  }
+
+  // ── Dialog B: Warning popups that block chat (usage limit, unauthorized, etc.) ──
+  var popup = document.querySelector('.composer-warning-popup');
+  if (popup) {
+    var popupTitle = popup.querySelector('.composer-error-title');
+    var popupText = popupTitle ? (popupTitle.textContent || '').toLowerCase() : '';
+
+    if (popupText.indexOf('usage limit') !== -1 || popupText.indexOf('hit your') !== -1 ||
+      popupText.indexOf('unauthorized') !== -1 || popupText.indexOf('suspicious') !== -1) {
+      var now = Date.now();
+      // Safety guards: max retries + cooldown
+      if (__usageLimitRetryCount >= USAGE_LIMIT_MAX_RETRIES) return { action: 'usage-limit-maxed' };
+      if (now - __lastUsageLimitResend < USAGE_LIMIT_COOLDOWN_MS) return { action: 'usage-limit-cooldown' };
+
+      // Close popup
+      var closeBtn = popup.querySelector('.composer-warning-popup-close-button');
+      if (closeBtn) closeBtn.click();
+
+      // Verify chat input has content
+      var input = document.querySelector('.aislash-editor-input[contenteditable="true"]');
+      if (!input || !(input.textContent || '').trim()) return { action: 'usage-limit-empty-input' };
+
+      // Click send button
+      var sendBtn = document.querySelector('.send-with-mode .anysphere-icon-button');
+      if (sendBtn && isElementClickable(sendBtn)) {
+        sendBtn.click();
+        __usageLimitRetryCount++;
+        __lastUsageLimitResend = now;
+        return { action: 'usage-limit-resent', retryCount: __usageLimitRetryCount };
+      }
+      return { action: 'usage-limit-no-send-btn' };
+    }
+  }
+
+  return null; // No dialog detected
+}
+
 // ── Main Execution ───────────────────────────────
 
 function findAndClickAcceptButtons() {
   var clickedButtons = [];
   var scanMode = 'none';
+
+  // ── Phase 0: Handle Cursor-specific dialogs (BEFORE generic scan) ──
+  var dialogResult = handleCursorDialogs();
+  if (dialogResult) {
+    var dialogClicked = (dialogResult.action.indexOf('resent') !== -1 || dialogResult.action.indexOf('continue') !== -1)
+      ? [dialogResult.action] : [];
+    return {
+      clicked: dialogClicked,
+      scanMode: 'cursor-dialog',
+      scrollClicked: false,
+      dialogAction: dialogResult,
+    };
+  }
 
   // Branch 1: We're in the chat panel iframe
   if (isChatPanelIframe()) {
@@ -564,6 +661,37 @@ function findAndClickAcceptButtons() {
           try {
             btn.click();
             clickedButtons.push(text);
+          } catch (e) { /* ignore */ }
+        }
+      }
+    }
+  }
+
+  // Branch 2.5: Cursor-specific — scan workbench editor area for Anysphere buttons
+  // These buttons (Keep All, Accept, etc.) live OUTSIDE standard diff containers
+  // but inside the editor part. They have distinctive Anysphere CSS classes.
+  if (clickedButtons.length === 0) {
+    // Only scan inside the editor part, NOT sidebar/statusbar/panel
+    var editorPart = document.getElementById('workbench.parts.editor');
+    if (editorPart) {
+      var anysphereSelectors = [
+        '.anysphere-text-button',
+        '.anysphere-secondary-button',
+        '.anysphere-focus-outline-button',
+        '[data-click-ready="true"]',
+      ].join(', ');
+      var ansBtns = deepQuerySelectorAll(editorPart, anysphereSelectors);
+      for (var ab = 0; ab < ansBtns.length; ab++) {
+        var aBtn = ansBtns[ab];
+        if (isInsideCodeOrProse(aBtn)) continue;
+        if (isInsideForbiddenZone(aBtn)) continue;
+        var aText = getButtonText(aBtn);
+        if (!aText) continue;
+        if (isAcceptButton(aText) && isElementClickable(aBtn)) {
+          try {
+            aBtn.click();
+            clickedButtons.push(aText);
+            scanMode = scanMode === 'none' ? 'anysphere-direct' : scanMode + '+anysphere';
           } catch (e) { /* ignore */ }
         }
       }
@@ -620,6 +748,7 @@ try {
     buttons: result.clicked,
     scanMode: result.scanMode,
     scrollClicked: result.scrollClicked || false,
+    dialogAction: result.dialogAction || null,
     timestamp: Date.now(),
   });
 } catch (e) {

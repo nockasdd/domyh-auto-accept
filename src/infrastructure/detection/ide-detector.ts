@@ -178,13 +178,22 @@ export class IDEDetector {
     }
 
     // Layer 4: Port range sweep (parallel probe)
-    const sweepPorts = [
-      ...range(8999, 9011), // Common CDP range
-      ...range(9222, 9231), // Chrome/Cursor default range
-    ];
-    const sweptPort = await this.sweepPortRange(sweepPorts);
-    if (sweptPort) {
-      return { port: sweptPort, source: 'port-sweep', validated: true };
+    // CRITICAL: ALL sweeps use IDE-aware probing to prevent cross-IDE connection
+    // (e.g. when both Antigravity on 9000 and Cursor on 9222 are running)
+    const idePortRange = this.getIDEPortRange(ideType);
+    const otherRange = ideType === IDEType.Cursor || ideType === IDEType.Windsurf || ideType === IDEType.VSCode
+      ? [...range(8999, 9011)]  // Antigravity/Trae range
+      : [...range(9222, 9231)]; // Cursor/Windsurf range
+    // First try the IDE's own port range with IDE-aware validation
+    const idePort = await this.sweepPortRange(idePortRange, ideType);
+    if (idePort) {
+      return { port: idePort, source: 'port-sweep', validated: true };
+    }
+    // Fallback: sweep other ranges — STILL uses IDE-aware validation to prevent
+    // connecting to another IDE that happens to be running on these ports
+    const otherPort = await this.sweepPortRange(otherRange, ideType);
+    if (otherPort) {
+      return { port: otherPort, source: 'port-sweep', validated: true };
     }
 
     // Layer 5: Adapter default (no validation — for retry timer setup)
@@ -201,6 +210,18 @@ export class IDEDetector {
   /** Check if the IDE was launched with CDP enabled */
   isCDPEnabled(): boolean {
     return this.getActiveCDPPort() !== null;
+  }
+
+  /**
+   * Get the port range to sweep for a specific IDE type.
+   * Returns the IDE's default port ± a small range.
+   */
+  private getIDEPortRange(ideType: IDEType): number[] {
+    const detection = DETECTIONS.find(d => d.type === ideType);
+    if (!detection) return [...range(8999, 9011), ...range(9222, 9231)];
+    const base = detection.defaultPort;
+    // Sweep a ±5 range around the IDE's default port
+    return range(Math.max(base - 2, 1), base + 6);
   }
 
   // ── Port discovery helpers ────────────────────────────
@@ -231,6 +252,57 @@ export class IDEDetector {
               (t: { type?: string }) => t.type && t.type !== 'node',
             );
             resolve(hasChromeTarget);
+          } catch {
+            resolve(false);
+          }
+        });
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+  }
+
+  /**
+   * IDE-aware CDP probe: validates that targets on the port belong to the
+   * expected IDE by checking page titles against known IDE name patterns.
+   * Returns true only if at least one target matches the expected IDE.
+   * Prevents cross-IDE connections (e.g. Cursor extension connecting to Antigravity).
+   */
+  private async probeForIDE(port: number, ideType: IDEType): Promise<boolean> {
+    return new Promise(resolve => {
+      const req = http.get(`http://127.0.0.1:${port}/json`, { timeout: 1500 }, res => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (!Array.isArray(parsed) || parsed.length === 0) {
+              resolve(false);
+              return;
+            }
+            // Build list of OTHER IDE names to reject
+            const allIDENames = ['antigravity', 'cursor', 'windsurf', 'trae', 'vscode', 'code'];
+            const ourName = ideType.toLowerCase();
+            const otherNames = allIDENames.filter(n => n !== ourName && n !== 'code');
+
+            // Check page-type targets for IDE identity
+            const pageTargets = parsed.filter(
+              (t: { type?: string; url?: string }) =>
+                t.type === 'page' && t.url && (t.url as string).includes('workbench'),
+            );
+            if (pageTargets.length === 0) {
+              // No workbench pages — could be webview-only, accept cautiously
+              resolve(true);
+              return;
+            }
+            // If ANY workbench page title contains ANOTHER IDE's name → wrong IDE
+            const hasOtherIDE = pageTargets.some(
+              (t: { title?: string }) =>
+                otherNames.some(name =>
+                  (t.title || '').toLowerCase().includes(name),
+                ),
+            );
+            resolve(!hasOtherIDE);
           } catch {
             resolve(false);
           }
@@ -382,11 +454,14 @@ export class IDEDetector {
    * Returns the first port that responds with valid CDP targets.
    * All probes run in parallel for speed (~1.5s total max).
    */
-  private async sweepPortRange(ports: number[]): Promise<number | null> {
+  private async sweepPortRange(ports: number[], ideType?: IDEType): Promise<number | null> {
+    const probe = ideType
+      ? (port: number) => this.probeForIDE(port, ideType)
+      : (port: number) => this.probeCDP(port);
     const results = await Promise.all(
       ports.map(async port => ({
         port,
-        ok: await this.probeCDP(port),
+        ok: await probe(port),
       })),
     );
     return results.find(r => r.ok)?.port ?? null;
@@ -421,9 +496,9 @@ export class IDEDetector {
     // VS Code-based IDEs set this in process.env
     return (
       process.env['VSCODE_PID'] ? null : // Raw VS Code doesn't have a custom app name marker
-      process.env['APPLICATION_NAME'] ??
-      process.env['APP_NAME'] ??
-      null
+        process.env['APPLICATION_NAME'] ??
+        process.env['APP_NAME'] ??
+        null
     );
   }
 }

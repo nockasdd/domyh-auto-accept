@@ -50,13 +50,24 @@ export class CursorAdapter extends BaseIDEAdapter {
         // Cursor may render action buttons as <span> with Tailwind classes
         'span[class*="bg-ide-button"]',
         'span[class*="cursor-pointer"][class*="select-none"]',
-        // Cursor-specific: Anysphere button class (confirmed via YOLO script)
+        // Cursor-specific: Anysphere button classes (confirmed via DOM dump)
         '.anysphere-secondary-button',
+        '.anysphere-text-button',
+        '.anysphere-focus-outline-button',
+        // Generic clickable indicator used on all interactive Anysphere buttons
+        '[data-click-ready="true"]',
       ],
       textPatterns: {
-        [ButtonType.AcceptAll]: [/^keep\s*all$/i, /^accept\s*all$/i],
-        [ButtonType.Accept]: [/^accept$/i, /^accept\s+change/i],
-        [ButtonType.Run]: [/^run$/i, /^run\s+command$/i],
+        [ButtonType.AcceptAll]: [
+          /^keep\s*all$/i, /^accept\s*all$/i,
+          /^apply\s*all$/i, /^accept\s*all\s*files$/i,
+        ],
+        [ButtonType.Accept]: [
+          /^accept$/i, /^accept\s+change/i,
+          // Handle "Accept ^⏎" keyboard shortcut suffix in Cursor UI
+          /^accept\s*[\^⏎↵⌃⌘⇧\s]*$/i,
+        ],
+        [ButtonType.Run]: [/^run$/i, /^run\s+command$/i, /^run\s+everything$/i],
         [ButtonType.Retry]: [/^retry$/i, /^try\s*again$/i],
         [ButtonType.Continue]: [/^continue$/i, /^yes$/i],
         [ButtonType.Permission]: [/^allow$/i, /^trust$/i],
@@ -66,13 +77,32 @@ export class CursorAdapter extends BaseIDEAdapter {
   }
 
   filterTargets(targets: CDPTarget[]): CDPTarget[] {
-    return targets.filter(
-      (t) =>
-        t.webSocketDebuggerUrl &&
-        (t.type === 'webview' ||
-         t.type === 'iframe' ||
-         (t.type === 'page' &&
-          (t.url.includes('workbench') || t.title.includes('Cursor')))),
-    );
+    // Other IDE names to explicitly reject — prevents cross-IDE connection
+    // when multiple VS Code forks share overlapping CDP port ranges
+    const otherIDEs = /\b(antigravity|windsurf|trae)\b/i;
+
+    return targets.filter((t) => {
+      if (!t.webSocketDebuggerUrl) return false;
+
+      const titleLower = (t.title || '').toLowerCase();
+
+      // CRITICAL: Reject targets that belong to another IDE.
+      // All VS Code forks have 'workbench' in their page URL, so URL alone
+      // is NOT sufficient to distinguish. Title format: "{workspace} - {IDE}"
+      if (otherIDEs.test(t.title)) return false;
+
+      // Webview targets (agent panels, chat) — IDE-agnostic, include if not rejected above
+      if (t.type === 'webview') return true;
+
+      // Page targets: must be a workbench page
+      if (t.type === 'page') {
+        if (!t.url.includes('workbench')) return false;
+        // Skip empty-title pages (background/preload pages)
+        if (!titleLower) return false;
+        return true;
+      }
+
+      return false;
+    });
   }
 }

@@ -24,8 +24,6 @@ import { DisposableStore } from '../core/disposable';
 import { DeathLoopGuard } from './death-loop-guard';
 import { SmartFocus } from './smart-focus';
 import { PayloadManager } from '../infrastructure/cdp/payload-manager';
-import { CDPSetup } from '../infrastructure/cdp/cdp-setup';
-// Relauncher disabled — popup caused engine instability
 import { IDEDetector } from '../infrastructure/detection/ide-detector';
 
 export class AutoAcceptEngine {
@@ -33,8 +31,6 @@ export class AutoAcceptEngine {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private cdpRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private cdpRetryAttempt = 0;
-  private cdpSetup: CDPSetup | null = null;
-  private cdpRestartPrompted = false;
   private stats: SessionStats = createSessionStats();
   private readonly disposables = new DisposableStore();
 
@@ -162,8 +158,10 @@ export class AutoAcceptEngine {
     } catch {
       this.logger.warn(`CDP not available on port ${port} — running Commands API only`);
 
-      // Auto-setup: patch argv.json with port=0 so next restart has CDP
-      await this.ensureCDPSetup();
+      // NOTE: CDP setup (argv.json + shortcut modification) is handled ONLY
+      // in extension.ts with persistent globalState guard.
+      // DO NOT show any setup prompt here — it causes infinite nag loop
+      // because engine's in-memory flags reset on every IDE restart.
 
       // Still start polling — Commands API works without CDP
       this.startPolling();
@@ -349,43 +347,7 @@ export class AutoAcceptEngine {
     }
   }
 
-  /**
-   * Auto-setup CDP via argv.json patching.
-   * Patches argv.json for future boots so next restart activates CDP.
-   * NOTE: Relauncher popup DISABLED — it was causing engine instability
-   * by showing restart dialogs on every CDP failure cycle.
-   */
-  private async ensureCDPSetup(): Promise<void> {
-    try {
-      const ideType = this.adapter.id;
-      const port = this.adapter.defaultCDPPort;
 
-      // Patch argv.json for future boots (idempotent)
-      this.cdpSetup = new CDPSetup(ideType, port, this.logger);
-      if (!this.cdpSetup.isCDPConfigured()) {
-        // CDP not configured at all — patch all argv.json files
-        const result = await this.cdpSetup.enableCDP();
-        if (result.error) {
-          this.logger.warn(`CDPSetup: ${result.error}`);
-        } else if (result.patched) {
-          this.logger.info(`CDPSetup: argv.json patched with port ${port}. Full IDE restart required.`);
-          await this.cdpSetup.promptRestart();
-        }
-      } else {
-        // CDP IS configured but port is CLOSED (we're in the catch block = CDP failed)
-        // → User needs a full quit+reopen (Reload Window ≠ Electron restart)
-        this.logger.info(`CDPSetup: CDP configured in argv.json but port not listening — full restart needed`);
-
-        // Show restart prompt ONCE per engine lifetime (don't nag on every CDP retry)
-        if (!this.cdpRestartPrompted && this.cdpSetup) {
-          this.cdpRestartPrompted = true;
-          await this.cdpSetup.promptRestart();
-        }
-      }
-    } catch (err) {
-      this.logger.debug(`CDPSetup: auto-setup failed: ${err}`);
-    }
-  }
 
   /** Single poll cycle — dual-approach */
   private async pollTick(): Promise<void> {
@@ -562,6 +524,11 @@ export class AutoAcceptEngine {
             totalBlocked += clickData.blocked ?? 0;
             totalMatches += clickData.total ?? 0;
             if (clickData.clickedType && !clickedType) clickedType = clickData.clickedType;
+
+            // Log Cursor dialog handling (usage limit, submit-previous, etc.)
+            if (data.dialogAction) {
+              this.logger.info(`[CDP] Cursor dialog: ${JSON.stringify(data.dialogAction)}`);
+            }
 
             if ((clickData.total ?? 0) > 0) {
               this.logger.debug(`[CDP:target] ${clickData.total} matches, ${clickData.clicks} clicked`);

@@ -45,7 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const fullConfig = config.getAll();
 
   logger.setDebugMode(fullConfig.debugMode);
-  logger.info('Domyh Auto Accept activating...');
+  logger.info('Domyh Auto Accept v1.0.2 activating...');
 
   // Register core services in IoC
   container.register(Tokens.Logger, () => logger);
@@ -56,36 +56,79 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const detector = new IDEDetector();
   const detection = detector.detect();
   logger.info(`IDE detected: ${detection.ideType} (source: ${detection.source}, port: ${detection.defaultPort})`);
-  // ── 2b. First-install CDP auto-setup ────────────────
-  // On first install: patch argv.json + auto-restart IDE silently (no manual restart needed)
-  // Subsequent activations: skip entirely via globalState flag
-  const cdpSetupDone = context.globalState.get<boolean>('cdpSetupDone', false);
-  if (!cdpSetupDone) {
-    const { CDPSetup } = await import('./infrastructure/cdp/cdp-setup');
+  // ── 2b. CDP auto-setup ──────────────────────────────
+  // Ensures IDE starts with --remote-debugging-port flag.
+  //   - If IDE already has flag → skip
+  //   - Always: patch argv.json + modify shortcut (idempotent, no harm)
+  //   - Popup prompt: shown ONCE via cdpPromptShown flag
+  {
     const { Relauncher } = await import('./infrastructure/cdp/relauncher');
     const port = detection.defaultPort;
-    const cdpSetup = new CDPSetup(detection.ideType, port, logger);
+    const relauncher = new Relauncher(logger, port);
+    const hasCDPFlag = relauncher.hasFlag();
+    logger.info(`CDP setup: hasFlag=${hasCDPFlag}, argv=[${process.argv.filter(a => a.startsWith('--remote')).join(', ') || 'none'}]`);
 
-    if (!cdpSetup.isCDPConfigured()) {
-      logger.info('First install: patching argv.json for CDP...');
-      const result = await cdpSetup.enableCDP();
-      if (result.patched) {
-        logger.info(`First install: argv.json patched with port ${port}`);
-
-        // Check if we need to restart (no CDP flag in process.argv)
-        const relauncher = new Relauncher(logger, port);
-        if (!relauncher.hasFlag()) {
-          logger.info('First install: auto-restarting IDE with CDP flag...');
-          await context.globalState.update('cdpSetupDone', true);
-          await relauncher.relaunch();
-          return; // IDE is quitting — activation aborted
+    if (hasCDPFlag) {
+      logger.info('CDP setup: IDE has --remote-debugging-port flag ✓');
+    } else {
+      // Always patch argv.json (idempotent — only writes if not already set)
+      try {
+        const { CDPSetup } = await import('./infrastructure/cdp/cdp-setup');
+        const cdpSetup = new CDPSetup(detection.ideType, port, logger);
+        if (!cdpSetup.isCDPConfigured()) {
+          const result = await cdpSetup.enableCDP();
+          if (result.patched) {
+            logger.info(`CDP setup: argv.json patched with port ${port}`);
+          }
+        } else {
+          logger.info('CDP setup: argv.json already configured ✓');
         }
+      } catch { /* argv.json may not exist for Cursor — that's OK */ }
+
+      // Always modify ALL shortcuts (idempotent — skips if already has flag)
+      const failedShortcuts: Awaited<ReturnType<typeof relauncher.findIDEShortcuts>> = [];
+      try {
+        const shortcuts = await relauncher.findIDEShortcuts();
+        logger.info(`CDP setup: found ${shortcuts.length} shortcut(s)`);
+        let modifiedCount = 0;
+        let alreadyOkCount = 0;
+        for (const shortcut of shortcuts) {
+          const modResult = await relauncher.ensureShortcutHasFlag(shortcut);
+          const status = modResult.modified ? 'MODIFIED' : (shortcut.hasFlag ? 'already OK' : 'FAILED');
+          logger.info(`CDP setup: [${shortcut.type}] ${shortcut.path.split(/[/\\]/).pop()} → ${status} (${modResult.message})`);
+          if (modResult.modified) modifiedCount++;
+          else if (shortcut.hasFlag) alreadyOkCount++;
+          else failedShortcuts.push(shortcut);
+        }
+        if (shortcuts.length === 0) {
+          logger.info('CDP setup: no shortcuts found — user must start with --remote-debugging-port manually');
+        } else {
+          logger.info(`CDP setup: ${modifiedCount}/${shortcuts.length} modified, ${alreadyOkCount} already OK, ${failedShortcuts.length} failed`);
+        }
+      } catch (err) {
+        logger.info(`CDP setup: shortcut modification failed: ${err}`);
+      }
+
+      // Log any failed shortcuts for debugging (no admin popup)
+      if (failedShortcuts.length > 0) {
+        logger.info(`CDP setup: ${failedShortcuts.length} shortcut(s) failed — will use direct relaunch instead`);
+      }
+
+      // Show setup prompt ONCE — guarded by cdpPromptShown
+      const promptShown = context.globalState.get<boolean>('cdpPromptShown', false);
+      if (!promptShown && failedShortcuts.length === 0) {
+        logger.info('CDP setup: showing setup prompt (first time)...');
+        const setupResult = await relauncher.showSetupPrompt();
+        await context.globalState.update('cdpPromptShown', true);
+
+        if (setupResult === 'relaunched') {
+          return; // IDE is quitting
+        }
+        logger.info(`CDP setup: ${setupResult} — continuing with Commands API`);
+      } else if (failedShortcuts.length === 0) {
+        logger.info('CDP setup: prompt already shown — skipping (use "Re-run CDP Setup" to reset)');
       }
     }
-
-    // Mark setup as done regardless
-    await context.globalState.update('cdpSetupDone', true);
-    logger.info('CDP first-install setup complete');
   }
 
   // ── 3. Register adapters ─────────────────────────
@@ -240,6 +283,15 @@ function registerCommands(
       container.resolve<DeathLoopGuard>(Tokens.DeathLoopGuard).reset();
       vscode.window.showInformationMessage('Retry counter reset ✅');
     }
+  });
+
+  register('domyh-auto-accept.resetCDPSetup', async () => {
+    await context.globalState.update('cdpSetupDone', undefined);
+    await context.globalState.update('cdpSetupAttempts', undefined);
+    await context.globalState.update('cdpPromptShown', undefined);
+    vscode.window.showInformationMessage(
+      'CDP setup reset ✅ — Restart the IDE to re-run setup.',
+    );
   });
 
   register('domyh-auto-accept.openDashboard', () => {

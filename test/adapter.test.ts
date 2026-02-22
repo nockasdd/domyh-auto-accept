@@ -104,3 +104,67 @@ describe('IDE Adapters', () => {
     });
   });
 });
+
+describe('CursorAdapter — Cursor-specific (DOM-evidenced)', () => {
+  const adapter = new CursorAdapter();
+
+  it('should match "Accept ^⏎" as Accept', () => {
+    const el = mockElement({ textContent: 'Accept ^⏎' });
+    const match = adapter.matchButton(el);
+    expect(match).not.toBeNull();
+    expect(match!.type).toBe(ButtonType.Accept);
+  });
+
+  it('should match "Keep All" as AcceptAll', () => {
+    const el = mockElement({ textContent: 'Keep All' });
+    const match = adapter.matchButton(el);
+    expect(match).not.toBeNull();
+    expect(match!.type).toBe(ButtonType.AcceptAll);
+  });
+
+  it('should match "Accept All Files" as AcceptAll', () => {
+    const el = mockElement({ textContent: 'Accept All Files' });
+    const match = adapter.matchButton(el);
+    expect(match).not.toBeNull();
+    expect(match!.type).toBe(ButtonType.AcceptAll);
+  });
+
+  it('should match "Run Everything" as Run', () => {
+    const el = mockElement({ textContent: 'Run Everything' });
+    const match = adapter.matchButton(el);
+    expect(match).not.toBeNull();
+    expect(match!.type).toBe(ButtonType.Run);
+  });
+
+  it('should NOT match "Undo All" (no accept pattern)', () => {
+    const el = mockElement({ textContent: 'Undo All' });
+    const match = adapter.matchButton(el);
+    expect(match).toBeNull();
+  });
+
+  it('should NOT match "Review" (not an accept action)', () => {
+    const el = mockElement({ textContent: 'Review' });
+    const match = adapter.matchButton(el);
+    expect(match).toBeNull();
+  });
+
+  it('should include all 3 Anysphere button classes in container selectors', () => {
+    const config = adapter.getButtonSelectors();
+    expect(config.containerSelectors).toContain('.anysphere-secondary-button');
+    expect(config.containerSelectors).toContain('.anysphere-text-button');
+    expect(config.containerSelectors).toContain('.anysphere-focus-outline-button');
+    expect(config.containerSelectors).toContain('[data-click-ready="true"]');
+  });
+
+  it('should NOT include iframe in filterTargets', () => {
+    const targets = [
+      { type: 'iframe', url: 'about:blank', title: '', webSocketDebuggerUrl: 'ws://x' },
+      { type: 'page', url: 'https://workbench', title: 'Cursor', webSocketDebuggerUrl: 'ws://y' },
+      { type: 'webview', url: '', title: '', webSocketDebuggerUrl: 'ws://z' },
+    ];
+    const filtered = adapter.filterTargets(targets as any);
+    expect(filtered.some(t => t.type === 'iframe')).toBe(false);
+    expect(filtered.some(t => t.type === 'page')).toBe(true);
+    expect(filtered.some(t => t.type === 'webview')).toBe(true);
+  });
+});

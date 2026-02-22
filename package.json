@@ -2,7 +2,7 @@
   "name": "domyh-auto-accept",
   "displayName": "Domyh Auto Accept",
   "description": "Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, VS Code Copilot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "nockasdd",
   "icon": "resources/icons/icon.png",
   "license": "MIT",
@@ -73,6 +73,10 @@
       {
         "command": "domyh-auto-accept.resetRetry",
         "title": "Domyh Auto Accept: Reset Retry Counter"
+      },
+      {
+        "command": "domyh-auto-accept.resetCDPSetup",
+        "title": "Domyh Auto Accept: Re-run CDP Setup"
       }
     ],
     "configuration": {
