@@ -31,6 +31,9 @@ jobs:
       - name: Lint
         run: npm run lint --if-present
 
+      - name: Security audit
+        run: npm audit --audit-level=high || true
+
       - name: Test
         run: npx vitest run
 

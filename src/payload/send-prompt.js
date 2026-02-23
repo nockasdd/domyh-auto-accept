@@ -65,36 +65,38 @@
     return JSON.stringify({ success: false, error: 'Chat input not found' });
   }
 
-  try {
-    // Focus the input
-    input.focus();
+  // Return Promise to ensure Enter key is dispatched before CDP evaluate resolves
+  return new Promise(function(resolve) {
+    try {
+      // Focus the input
+      input.focus();
 
-    // Clear existing content
-    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-      input.value = '';
-      input.value = text;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      // Contenteditable — use execCommand for React compatibility
-      document.execCommand('selectAll', false, null);
-      document.execCommand('insertText', false, text);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      // Clear existing content
+      if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+        input.value = '';
+        input.value = text;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        // Contenteditable — use execCommand for React compatibility
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, text);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      // Wait for React state cycle, then press Enter
+      setTimeout(function() {
+        var enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        input.dispatchEvent(enterEvent);
+        resolve(JSON.stringify({ success: true }));
+      }, 300);
+    } catch (e) {
+      resolve(JSON.stringify({ success: false, error: e.message || String(e) }));
     }
-
-    // Wait for React state cycle, then press Enter
-    setTimeout(function() {
-      var enterEvent = new KeyboardEvent('keydown', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      });
-      input.dispatchEvent(enterEvent);
-    }, 300);
-
-    return JSON.stringify({ success: true });
-  } catch (e) {
-    return JSON.stringify({ success: false, error: e.message || String(e) });
-  }
+  });

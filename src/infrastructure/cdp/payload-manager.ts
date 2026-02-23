@@ -39,6 +39,12 @@ export class PayloadManager {
     return `(function(){ ${base} })();`;
   }
 
+  /** Get probe-buttons payload — finds Keep All etc. without clicking */
+  getProbeButtons(): string {
+    const base = this.getSource('probe-buttons');
+    return `(function(){ ${base} })();`;
+  }
+
   /** Get auto-accept payload with config injected */
   getAutoAccept(config: Record<string, unknown>): string {
     const base = this.getSource('auto-accept');

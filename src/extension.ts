@@ -154,7 +154,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Load JS payloads
   const payloads = new PayloadManager(logger);
   const payloadDir = path.join(context.extensionPath, 'dist', 'payload');
-  const payloadNames = ['auto-accept', 'probe', 'send-prompt'];
+  const payloadNames = ['auto-accept', 'probe', 'probe-buttons', 'send-prompt'];
   for (const name of payloadNames) {
     const filePath = path.join(payloadDir, `${name}.js`);
     try {
@@ -291,6 +291,64 @@ function registerCommands(
     await context.globalState.update('cdpPromptShown', undefined);
     vscode.window.showInformationMessage(
       'CDP setup reset ✅ — Restart the IDE to re-run setup.',
+    );
+  });
+
+  register('domyh-auto-accept.probeButtons', async () => {
+    if (!engine) {
+      vscode.window.showWarningMessage('Engine not ready.');
+      return;
+    }
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Probing buttons...' },
+      async () => {
+        try {
+          const report = await engine.probeButtons();
+          const doc = await vscode.workspace.openTextDocument({
+            content: report,
+            language: 'json',
+          });
+          await vscode.window.showTextDocument(doc, { preview: false });
+          try {
+            const parsed = JSON.parse(report);
+            if (parsed.error) {
+              vscode.window.showErrorMessage(`❌ Probe failed: ${parsed.error}`);
+              if (parsed.error.includes('Not connected') || parsed.error.includes('CDP')) {
+                vscode.window.showInformationMessage(
+                  '💡 Tip: Ensure Auto Accept is started and CDP is connected. Try: Domyh Auto Accept: Start',
+                );
+              }
+              return;
+            }
+            if (parsed.keepAllFound) {
+              vscode.window.showInformationMessage('✅ Keep All found and would be clicked');
+            } else if (parsed.keepAllDetails) {
+              const details = parsed.keepAllDetails;
+              vscode.window.showWarningMessage(
+                `⚠️ Keep All found but blocked:\n` +
+                `- inForbidden: ${details.inForbiddenZone}\n` +
+                `- inCode: ${details.inCodeOrProse}\n` +
+                `- clickable: ${details.isClickable}\n` +
+                `- isAcceptButton: ${details.isAcceptButton}\n` +
+                `- text: "${details.text}"\n` +
+                `- classes: ${details.classes}`,
+              );
+            } else {
+              const diag = parsed.diagnostics || {};
+              vscode.window.showWarningMessage(
+                `❌ Keep All not found in scan\n` +
+                `Containers: ${parsed.containersFound || 0}, Buttons scanned: ${parsed.buttonsScanned || 0}\n` +
+                `composerHeaderById: ${diag.composerHeaderById}, composerPaneByQuery: ${diag.composerPaneByQuery}\n` +
+                `anysphereButtons: ${diag.anysphereButtons || 0}, dataClickReady: ${diag.dataClickReadyButtons || 0}`,
+              );
+            }
+          } catch (parseErr) {
+            vscode.window.showErrorMessage(`Failed to parse probe result: ${parseErr}`);
+          }
+        } catch (err) {
+          vscode.window.showErrorMessage(`Probe failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
     );
   });
 

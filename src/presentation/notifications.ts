@@ -52,24 +52,8 @@ export class NotificationManager {
       }),
     );
 
-    // Permission auto-allowed
-    disposables.add(
-      eventBus.on('permission:autoAllowed', ({ dialogType }: { dialogType: string }) => {
-        vscode.window
-          .showInformationMessage(
-            `🔓 Auto-allowed: ${dialogType}`,
-            'Configure',
-          )
-          .then((action) => {
-            if (action === 'Configure') {
-              vscode.commands.executeCommand(
-                'workbench.action.openSettings',
-                'domyh-auto-accept',
-              );
-            }
-          });
-      }),
-    );
+    // Permission auto-allowed — REMOVED: event never emitted (see audit_2026-02-23)
+    // If implementing auto-allow feature, re-enable this subscription
 
     // Command blocked by safety guard
     disposables.add(

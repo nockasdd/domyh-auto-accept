@@ -135,10 +135,10 @@ export class DashboardPanel {
       }),
     );
 
-    // Command blocked → WebView
+    // Command blocked → WebView (now implemented in engine.ts)
     this.disposables.add(
       this.eventBus.on('engine:commandBlocked', (info: { command: string; pattern: string }) => {
-        this.panel.webview.postMessage({ type: 'activity', data: { event: `🛡️ Blocked: ${info.command}` } });
+        this.panel.webview.postMessage({ type: 'activity', data: { event: `🛡️ Blocked: ${info.command} (${info.pattern})` } });
       }),
     );
 
@@ -483,17 +483,23 @@ export class DashboardPanel {
     }
 
     function formatTimeSaved(seconds) {
-      if (!seconds) return '0s';
+      if (!seconds || seconds <= 0) return '0s';
       if (seconds < 60) return seconds + 's';
       const m = Math.floor(seconds / 60);
-      if (m < 60) return m + 'm ' + (seconds % 60) + 's';
-      return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+      const remainingSeconds = seconds % 60;
+      if (m < 60) return m + 'm' + (remainingSeconds > 0 ? ' ' + remainingSeconds + 's' : '');
+      const h = Math.floor(m / 60);
+      const remainingMinutes = m % 60;
+      return h + 'h' + (remainingMinutes > 0 ? ' ' + remainingMinutes + 'm' : '') + (remainingSeconds > 0 ? ' ' + remainingSeconds + 's' : '');
     }
 
     // Update uptime every second
     setInterval(function() {
+      var uptimeEl = document.getElementById('statUptime');
       if (sessionStart > 0) {
-        document.getElementById('statUptime').textContent = formatDuration(Date.now() - sessionStart);
+        uptimeEl.textContent = formatDuration(Date.now() - sessionStart);
+      } else {
+        uptimeEl.textContent = '—';
       }
     }, 1000);
 
@@ -507,7 +513,10 @@ export class DashboardPanel {
           document.getElementById('statRetries').textContent = data.retriesAttempted || 0;
           document.getElementById('statPrompts').textContent = data.promptsSent || 0;
           document.getElementById('statTimeSaved').textContent = formatTimeSaved(data.estimatedTimeSaved || 0);
-          if (data.sessionStartTime) sessionStart = data.sessionStartTime;
+          // Update sessionStart if provided (important for initial state)
+          if (data.sessionStartTime && data.sessionStartTime > 0) {
+            sessionStart = data.sessionStartTime;
+          }
           if (data.lastClickTime) lastClickTime = data.lastClickTime;
           break;
 
@@ -543,11 +552,16 @@ export class DashboardPanel {
           break;
 
         case 'queue': {
-          var pct = ((data.index + 1) / data.total * 100).toFixed(0);
-          document.getElementById('queueProgress').style.width = pct + '%';
-          document.getElementById('queueInfo').textContent =
-            'Prompt ' + (data.index + 1) + ' of ' + data.total;
-          addLog('Queue: ' + (data.index + 1) + '/' + data.total);
+          if (data.total && data.total > 0) {
+            var pct = Math.min(100, ((data.index + 1) / data.total * 100).toFixed(0));
+            document.getElementById('queueProgress').style.width = pct + '%';
+            document.getElementById('queueInfo').textContent =
+              'Prompt ' + (data.index + 1) + ' of ' + data.total;
+            addLog('Queue: ' + (data.index + 1) + '/' + data.total);
+          } else {
+            document.getElementById('queueProgress').style.width = '0%';
+            document.getElementById('queueInfo').textContent = 'No queue active';
+          }
           break;
         }
 

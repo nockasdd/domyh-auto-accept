@@ -46,13 +46,19 @@ export class SmartFocus {
         if (editor) {
           this.focusState = 'editor';
           this.setAutoAccept(true, 'Editor focused → auto-accept ON');
-        } else if (this.focusState !== 'terminal') {
-          // No editor AND not in terminal → likely chat panel or sidebar
-          this.focusState = 'other';
-          this.setAutoAccept(false, 'Chat/sidebar focused → auto-accept OFF');
+        } else {
+          // No editor — check if terminal is actually focused
+          const activeTerminal = vscode.window.activeTerminal;
+          if (activeTerminal) {
+            // Terminal is focused — keep ON
+            this.focusState = 'terminal';
+            this.setAutoAccept(true, 'Terminal focused → auto-accept ON');
+          } else {
+            // No editor AND no terminal → likely chat panel or sidebar
+            this.focusState = 'other';
+            this.setAutoAccept(false, 'Chat/sidebar focused → auto-accept OFF');
+          }
         }
-        // If focusState is 'terminal', keep auto-accept ON
-        // (terminal focus fires onDidChangeActiveTerminal, not this event)
       }),
     );
 

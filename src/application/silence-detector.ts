@@ -1,17 +1,19 @@
 /**
- * SilenceDetector — Monitors CDP click state to detect agent idle periods
+ * SilenceDetector — Monitors click activity to detect agent idle periods
  *
- * SRP: Only monitors click activity via CDP evaluation.
+ * SRP: Only monitors click activity via Engine stats events.
  * Used by Scheduler to know when a task is complete and the next prompt can be sent.
  *
  * Algorithm:
- * 1. Poll `window.__autoAcceptState.clicks` via CDP every 5s
+ * 1. Subscribe to `engine:statsUpdated` events
  * 2. If clicks changed → update lastActivityTime
- * 3. If elapsed >= minRuntime AND silence >= silenceTimeout → fire onSilence
+ * 3. Poll every 5s: if elapsed >= minRuntime AND silence >= silenceTimeout → fire onSilence
  */
 
-import { ICDPConnector } from '../domain/interfaces/cdp-connector';
+import { IEventBus } from '../domain/interfaces/event-bus';
+import { SessionStats } from '../domain/types/stats';
 import { Logger } from '../core/logger';
+import { DisposableStore } from '../core/disposable';
 
 /** Configuration for silence detection */
 export interface SilenceConfig {
@@ -29,12 +31,6 @@ const DEFAULT_CONFIG: SilenceConfig = {
   pollIntervalMs: 5_000,
 };
 
-/** Result from reading CDP click state */
-interface ClickState {
-  clicks: number;
-  lastClick: number;
-}
-
 export class SilenceDetector {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastClickCount = 0;
@@ -42,9 +38,10 @@ export class SilenceDetector {
   private taskStartTime = 0;
   private onSilenceCallback: (() => void) | null = null;
   private config: SilenceConfig = DEFAULT_CONFIG;
+  private readonly disposables = new DisposableStore();
 
   constructor(
-    private readonly cdp: ICDPConnector,
+    private readonly eventBus: IEventBus,
     private readonly logger: Logger,
   ) {}
 
@@ -68,10 +65,20 @@ export class SilenceDetector {
       `[SilenceDetector] Started monitoring (timeout=${this.config.silenceTimeoutSec}s, minRuntime=${this.config.minRuntimeSec}s)`,
     );
 
+    // Subscribe to engine stats updates to track click activity
+    this.disposables.add(
+      this.eventBus.on('engine:statsUpdated', (stats: SessionStats) => {
+        if (stats.totalClicks > this.lastClickCount) {
+          this.lastClickCount = stats.totalClicks;
+          this.lastActivityTime = Date.now();
+          this.logger.debug(`[SilenceDetector] Activity detected: ${stats.totalClicks} total clicks`);
+        }
+      }),
+    );
+
+    // Poll periodically to check silence conditions
     this.pollTimer = setInterval(() => {
-      this.poll().catch((err) => {
-        this.logger.warn(`[SilenceDetector] Poll error: ${err}`);
-      });
+      this.poll();
     }, this.config.pollIntervalMs);
   }
 
@@ -104,55 +111,27 @@ export class SilenceDetector {
 
   // ────────────────────────────────────────────────────
 
-  private async poll(): Promise<void> {
-    try {
-      const result = await this.cdp.evaluate(
-        'JSON.stringify({ clicks: window.__autoAcceptState?.clicks || 0, lastClick: window.__autoAcceptState?.lastClick || 0 })',
-        3_000,
+  private poll(): void {
+    // Check silence conditions based on lastActivityTime
+    const now = Date.now();
+    const runtimeMs = now - this.taskStartTime;
+    const silenceMs = now - this.lastActivityTime;
+    const minRuntimeMs = this.config.minRuntimeSec * 1_000;
+    const silenceTimeoutMs = this.config.silenceTimeoutSec * 1_000;
+
+    if (runtimeMs >= minRuntimeMs && silenceMs >= silenceTimeoutMs) {
+      this.logger.info(
+        `[SilenceDetector] Silence detected after ${Math.floor(silenceMs / 1_000)}s ` +
+        `(runtime: ${Math.floor(runtimeMs / 1_000)}s)`,
       );
-
-      if (!result.success || typeof result.value !== 'string') {
-        return; // CDP not connected or no state — skip this poll
-      }
-
-      let state: ClickState;
-      try {
-        state = JSON.parse(result.value as string);
-      } catch {
-        return; // Malformed response — skip
-      }
-
-      // Detect activity
-      if (state.clicks > this.lastClickCount) {
-        this.lastClickCount = state.clicks;
-        this.lastActivityTime = Date.now();
-        this.logger.debug(`[SilenceDetector] Activity detected: ${state.clicks} total clicks`);
-        return;
-      }
-
-      // Check silence conditions
-      const now = Date.now();
-      const runtimeMs = now - this.taskStartTime;
-      const silenceMs = now - this.lastActivityTime;
-      const minRuntimeMs = this.config.minRuntimeSec * 1_000;
-      const silenceTimeoutMs = this.config.silenceTimeoutSec * 1_000;
-
-      if (runtimeMs >= minRuntimeMs && silenceMs >= silenceTimeoutMs) {
-        this.logger.info(
-          `[SilenceDetector] Silence detected after ${Math.floor(silenceMs / 1_000)}s ` +
-          `(runtime: ${Math.floor(runtimeMs / 1_000)}s)`,
-        );
-        const callback = this.onSilenceCallback;
-        this.stopMonitoring();
-        callback?.();
-      }
-    } catch (err) {
-      // CDP may be disconnected — continue polling until stopped
-      this.logger.debug(`[SilenceDetector] CDP error during poll: ${err}`);
+      const callback = this.onSilenceCallback;
+      this.stopMonitoring();
+      callback?.();
     }
   }
 
   dispose(): void {
     this.stopMonitoring();
+    this.disposables.dispose();
   }
 }

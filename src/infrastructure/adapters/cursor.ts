@@ -89,7 +89,7 @@ export class CursorAdapter extends BaseIDEAdapter {
       // CRITICAL: Reject targets that belong to another IDE.
       // All VS Code forks have 'workbench' in their page URL, so URL alone
       // is NOT sufficient to distinguish. Title format: "{workspace} - {IDE}"
-      if (otherIDEs.test(t.title)) return false;
+      if (t.title && otherIDEs.test(t.title)) return false;
 
       // Webview targets (agent panels, chat) — IDE-agnostic, include if not rejected above
       if (t.type === 'webview') return true;

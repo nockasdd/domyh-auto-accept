@@ -189,6 +189,99 @@ export class AutoAcceptEngine {
     return { ...this.stats };
   }
 
+  /** Run probe-buttons payload (find Keep All etc. without clicking). Returns JSON report. */
+  async probeButtons(): Promise<string> {
+    if (!this.payloads.has('probe-buttons')) {
+      return JSON.stringify({ error: 'probe-buttons payload not found' }, null, 2);
+    }
+    // Check CDP connection state
+    const cdpState = this.cdp.state;
+    if (cdpState !== ConnectionState.Connected) {
+      // If engine is not running, try to start it automatically
+      if (this.state !== EngineState.Polling) {
+        this.logger.info('[ProbeButtons] Engine not running, attempting to start...');
+        try {
+          await this.start();
+          // Wait a bit for CDP to connect
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          // Check again
+          if (this.cdp.state !== ConnectionState.Connected) {
+            return JSON.stringify(
+              {
+                error: `Not connected (state: ${this.cdp.state}). Please start Auto Accept first.`,
+                success: false,
+                cdpState: this.cdp.state,
+                hint: 'Run command: Domyh Auto Accept: Start',
+              },
+              null,
+              2,
+            );
+          }
+        } catch (err) {
+          return JSON.stringify(
+            {
+              error: `Failed to start engine: ${err instanceof Error ? err.message : String(err)}`,
+              success: false,
+              cdpState: this.cdp.state,
+              hint: 'Run command: Domyh Auto Accept: Start',
+            },
+            null,
+            2,
+          );
+        }
+      } else {
+        return JSON.stringify(
+          {
+            error: `Not connected (state: ${cdpState}). Please start Auto Accept first.`,
+            success: false,
+            cdpState,
+            hint: 'Run command: Domyh Auto Accept: Start',
+          },
+          null,
+          2,
+        );
+      }
+    }
+    try {
+      const payload = this.payloads.getProbeButtons();
+      const result = await this.cdp.evaluate(payload, 10000);
+      if (!result.success) {
+        return JSON.stringify(
+          {
+            error: result.error || 'CDP evaluate failed',
+            success: false,
+            cdpState: this.cdp.state,
+          },
+          null,
+          2,
+        );
+      }
+      const value = result.value;
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          parsed.cdpState = this.cdp.state;
+          return JSON.stringify(parsed, null, 2);
+        } catch {
+          return value;
+        }
+      }
+      const report = value ?? {};
+      (report as { cdpState?: string }).cdpState = this.cdp.state;
+      return JSON.stringify(report, null, 2);
+    } catch (err) {
+      return JSON.stringify(
+        {
+          error: err instanceof Error ? err.message : String(err),
+          success: false,
+          cdpState: this.cdp.state,
+        },
+        null,
+        2,
+      );
+    }
+  }
+
   /** Toggle engine on/off — persists state to settings */
   async toggle(): Promise<boolean> {
     if (this.state === EngineState.Polling) {
@@ -505,8 +598,11 @@ export class AutoAcceptEngine {
     try {
       if (!this.payloads.has('auto-accept')) return false;
 
-      // TODO: Refactor auto-accept.js to consume dynamic config (bannedCommands, containerSelectors, etc.)
-      const payload = this.payloads.getAutoAccept({});
+      // Pass bannedCommands config to payload for enforcement
+      const config = this.config.getAll();
+      const payload = this.payloads.getAutoAccept({
+        bannedCommands: config.bannedCommands || [],
+      });
 
       // Phase 1: Evaluate across ALL connected targets (pages + webviews)
       let totalClicks = 0;
@@ -527,11 +623,14 @@ export class AutoAcceptEngine {
 
             // Log Cursor dialog handling (usage limit, submit-previous, etc.)
             if (data.dialogAction) {
-              this.logger.info(`[CDP] Cursor dialog: ${JSON.stringify(data.dialogAction)}`);
+             // this.logger.info(`[CDP] Cursor dialog: ${JSON.stringify(data.dialogAction)}`);
             }
 
             if ((clickData.total ?? 0) > 0) {
-              this.logger.debug(`[CDP:target] ${clickData.total} matches, ${clickData.clicks} clicked`);
+              const clicks = clickData.clicks ?? 0;
+              if (clicks > 0) {
+                // Logging disabled for performance
+              }
             }
           } catch (parseErr) {
             this.logger.debug(`[CDP:target] JSON parse error: ${parseErr}`);
@@ -540,12 +639,20 @@ export class AutoAcceptEngine {
       }
 
       // Phase 2: Fall back to iframe execution contexts if no clicks from targets
-      if (totalClicks === 0) {
-        const iframePatterns = this.adapter.getIframePatterns?.() ?? [];
-        const iframeContexts = this.cdp.getIframeContexts(iframePatterns.length > 0 ? iframePatterns : undefined);
+      // IMPORTANT: For Antigravity, buttons are ALWAYS in iframes, so we should always check iframes
+      const iframePatterns = this.adapter.getIframePatterns?.() ?? [];
+      const iframeContexts = this.cdp.getIframeContexts(iframePatterns.length > 0 ? iframePatterns : undefined);
+      
+      if (iframeContexts.length > 0) {
+        this.logger.debug(`[CDP] Found ${iframeContexts.length} iframe execution context(s) to scan`);
+      }
 
+      // Always scan iframes if we have contexts (especially for Antigravity)
+      // But prioritize if no clicks from Phase 1
+      if (totalClicks === 0 || iframeContexts.length > 0) {
         for (const ctx of iframeContexts) {
           try {
+            this.logger.debug(`[CDP] Injecting payload into iframe context: ${ctx.name || ctx.contextId}`);
             const iframeResult = await this.cdp.evaluateInContext(payload, ctx.contextId, 3000);
             if (iframeResult.success && iframeResult.value) {
               const data = typeof iframeResult.value === 'string' ? JSON.parse(iframeResult.value) : iframeResult.value;
@@ -556,9 +663,12 @@ export class AutoAcceptEngine {
               if (clickData.clickedType && !clickedType) clickedType = clickData.clickedType;
 
               if (clickData.total > 0) {
-                this.logger.debug(
-                  `[CDP:iframe:${ctx.name || ctx.contextId}] ${clickData.total} matches, ${clickData.clicks} clicked`,
-                );
+                const iframeLog = `[CDP:iframe:${ctx.name || ctx.contextId}] ${clickData.total} matches, ${clickData.clicks} clicked`;
+                if (clickData.clicks > 0) {
+                  this.logger.info(iframeLog);
+                } else {
+                  this.logger.debug(iframeLog);
+                }
               }
 
               // Stop scanning after first successful click in an iframe
@@ -571,12 +681,7 @@ export class AutoAcceptEngine {
         }
       }
 
-      // Aggregate results
-      this.logger.debug(
-        `[CDP] Scan: ${totalMatches} matches, ${totalClicks} clicked` +
-        (clickedType ? ` (${clickedType})` : '') +
-        (totalBlocked > 0 ? `, ${totalBlocked} blocked` : ''),
-      );
+      // Aggregate results (logging disabled for performance)
 
       if (totalClicks > 0) {
         const updatedClicksByType = { ...this.stats.clicksByType };
@@ -602,6 +707,13 @@ export class AutoAcceptEngine {
           blockedCommands: this.stats.blockedCommands + totalBlocked,
         };
         this.eventBus.emit('engine:statsUpdated', this.stats);
+        // Emit commandBlocked event for each blocked command
+        for (let i = 0; i < totalBlocked; i++) {
+          this.eventBus.emit('engine:commandBlocked', {
+            command: 'run',
+            pattern: 'dangerous-command-or-unparseable',
+          });
+        }
       }
 
       return false;

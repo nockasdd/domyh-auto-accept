@@ -40,7 +40,7 @@ export class Scheduler implements IScheduler {
     private readonly config: ConfigReader,
     private readonly logger: Logger,
   ) {
-    this.silenceDetector = new SilenceDetector(cdp, logger);
+    this.silenceDetector = new SilenceDetector(eventBus, logger);
   }
 
   // ── IScheduler implementation ─────────────────────
@@ -347,13 +347,17 @@ export class Scheduler implements IScheduler {
     }
 
     // Use PayloadManager to inject prompt via CDP
+    // Use evaluateAll to ensure prompt reaches chat panel (may be in webview/iframe)
     const payload = this.payloads.getSendPrompt(text, '');
-    this.cdp.evaluate(payload, 10_000).then((result) => {
-      if (result.success) {
+    this.cdp.evaluateAll(payload, 10_000).then((results) => {
+      // Check if any target succeeded
+      const success = results.some(r => r.success);
+      if (success) {
         this.logger.info('[Scheduler] Prompt sent successfully');
         this.eventBus.emit('scheduler:promptSent', { text, target: 'cdp' });
       } else {
-        this.logger.error(`[Scheduler] Failed to send prompt: ${result.error}`);
+        const errors = results.map(r => r.error).filter(Boolean).join('; ');
+        this.logger.error(`[Scheduler] Failed to send prompt to all targets: ${errors || 'unknown error'}`);
       }
     }).catch((err) => {
       this.logger.error(`[Scheduler] CDP error sending prompt: ${err}`);

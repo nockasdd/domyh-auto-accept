@@ -2,7 +2,7 @@
   "name": "domyh-auto-accept",
   "displayName": "Domyh Auto Accept",
   "description": "Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, VS Code Copilot",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "nockasdd",
   "icon": "resources/icons/icon.png",
   "license": "MIT",
@@ -77,6 +77,10 @@
       {
         "command": "domyh-auto-accept.resetCDPSetup",
         "title": "Domyh Auto Accept: Re-run CDP Setup"
+      },
+      {
+        "command": "domyh-auto-accept.probeButtons",
+        "title": "Domyh Auto Accept: Probe Buttons (Find Keep All)"
       }
     ],
     "configuration": {

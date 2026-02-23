@@ -47,6 +47,7 @@ const mockConfig = {
 // Mock CDPConnector
 const mockCDP = {
   evaluate: vi.fn().mockResolvedValue({ success: true, value: '{"clicks":0,"lastClick":0}' }),
+  evaluateAll: vi.fn().mockResolvedValue([{ success: true, value: '{"success":true}' }]),
   connect: vi.fn().mockResolvedValue(undefined),
   disconnect: vi.fn(),
   isConnected: vi.fn().mockReturnValue(true),
