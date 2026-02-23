@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.3] — 2026-02-23
+
+### Antigravity 1.18.4 Compatibility
+
+- **Main-Document Chat Support** — Updated Antigravity adapter for the new chat layout (no iframe)
+  - Detects `#conversation` inside `div.antigravity-agent-side-panel` on the main workbench page
+  - Reuses the same scroll protection and bottom-button logic as the old iframe chat panel
+  - Only auto-scrolls when user is not actively scrolling and chat is near the bottom
+- **Scroll-To-Bottom Button Handling** — Automatically clicks the floating "Scroll to bottom" button when safe
+  - Prefers scrolling the outer chat scrollbar to bottom first
+  - Falls back to clicking the `aria-label="Scroll to bottom"` button if still not at bottom
+- **Run Command Card Auto-Run** — Supports new Antigravity "Run command?" confirmation cards in the main document
+  - Detects the "Run" button inside cards with header text containing "Run command?"
+  - Applies the same dangerous command safety gate as Cursor before auto-running
+- **Accept All in Agent Header** — Auto-clicks "Accept all" in the "1 File With Changes" header
+  - Locates `span` with text "Accept all" near text "File With Changes"
+  - Respects forbidden zones and clickability checks to avoid mis-clicks
+
+> Tested with **Antigravity Version: 1.18.4**
+
 ## [1.0.2] — 2026-02-23
 
 ### Enhanced Cursor Support

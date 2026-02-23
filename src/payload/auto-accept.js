@@ -1825,6 +1825,42 @@ function findAndClickAcceptButtons() {
   var blockedCount = 0;
   var scanMode = 'none';
 
+  // ── Branch 0.5: Antigravity chat panel in MAIN document (no iframe) ──
+  // New Antigravity versions render the agent chat panel directly in the main
+  // workbench document under a container with id="conversation".
+  // In this case, we still want the same behavior as the iframe chat:
+  //   - auto-scroll to bottom when user is NOT scrolling and chat is near bottom
+  //   - click the floating "Scroll to bottom" button when appropriate
+  try {
+    if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+      var mainConversation = document.getElementById('conversation');
+      if (mainConversation && window === window.top) {
+        scanMode = 'chat-main-document';
+
+        var mainUserScrolling = isUserScrolling(window);
+        var mainChatScrolledUp = isChatScrolledUp(document);
+        var mainScrolled = false;
+
+        if (!mainUserScrolling && !mainChatScrolledUp) {
+          // First, try to scroll the outer scrollbar (main chat container)
+          mainScrolled = scrollOuterScrollbarToBottom(document);
+
+          // Then try clicking the "Scroll to bottom" button if available
+          if (!mainScrolled) {
+            mainScrolled = clickScrollToBottomIfVisible(document);
+          }
+        }
+
+        // NOTE: For main-document chat we only handle scroll behavior here.
+        // Button auto-accept in diff/editor areas is still handled below by
+        // the generic branches (editor-diff, etc.).
+
+        // If we scrolled or did nothing else, return early with scroll info.
+        return { clicked: clickedButtons, scanMode: scanMode, scrollClicked: mainScrolled };
+      }
+    }
+  } catch (e) { /* ignore */ }
+
   // ── Phase 0: Handle Cursor-specific dialogs (BEFORE generic scan) ──
   var dialogResult = handleCursorDialogs();
   if (dialogResult) {
@@ -2026,6 +2062,114 @@ function findAndClickAcceptButtons() {
           }
         }
       } catch (e) { /* cross-origin */ }
+    }
+  } catch (e) { /* ignore */ }
+
+  // Branch 4: Antigravity "Run command?" cards on main workbench (no iframe)
+  // New Antigravity versions render the agent panel directly in the main workbench
+  // (no separate iframe). The terminal Run confirmation card has a header
+  // "Run command?" and a primary "Run" button with shortcut text (e.g. "Alt+⏎").
+  //
+  // We detect these cards by:
+  //   - Finding buttons with text exactly "run"
+  //   - Ensuring they live inside a container whose text includes "run command?"
+  //   - Applying the same dangerous-command safety gate as Cursor
+  //
+  // This branch is IDE-agnostic but highly specific to the "Run command?" layout,
+  // so it should be safe for other IDEs.
+  try {
+    var allButtonsForRunCards = deepQuerySelectorAll(document, BUTTON_SELECTORS);
+    for (var rcb = 0; rcb < allButtonsForRunCards.length; rcb++) {
+      var rcBtn = allButtonsForRunCards[rcb];
+      if (checkedElements.has(rcBtn)) continue;
+
+      var rcText = getButtonText(rcBtn);
+      if (!rcText || rcText !== 'run') continue; // Only care about real Run buttons here
+
+      // Ensure this Run button belongs to a "Run command?" confirmation card
+      var rcParent = rcBtn.parentElement;
+      var isRunCommandCard = false;
+      for (var rd = 0; rd < 15 && rcParent; rd++) {
+        try {
+          var rcParentText = (rcParent.textContent || '').toLowerCase();
+          if (rcParentText.indexOf('run command?') !== -1 || rcParentText.indexOf('run command ?') !== -1) {
+            isRunCommandCard = true;
+            break;
+          }
+        } catch (e) { /* ignore text errors */ }
+        rcParent = rcParent.parentElement;
+      }
+      if (!isRunCommandCard) continue;
+
+      checkedElements.add(rcBtn);
+      if (isInsideCodeOrProse(rcBtn)) continue;
+      if (isInsideForbiddenZone(rcBtn)) continue;
+
+      if (!isElementClickable(rcBtn)) continue;
+
+      // Safety gate: check dangerous commands for this Run button
+      var runCardCheck = shouldAllowRunButton(rcBtn);
+      if (!runCardCheck.allowed) {
+        blockedCount++;
+        continue;
+      }
+
+      try {
+        rcBtn.click();
+        clickedButtons.push(rcText);
+        scanMode = scanMode === 'none' ? 'run-command-card' : scanMode + '+run-card';
+      } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* ignore */ }
+
+  // Branch 5: Antigravity "Accept all" in agent changes header (no iframe)
+  // The new Antigravity agent diff header shows:
+  //   "Reject all" (secondary) and "Accept all" (primary) as span elements,
+  //   plus a label like "1 File With Changes".
+  // These are not <button> elements, so the generic BUTTON_SELECTORS miss them.
+  //
+  // We locate "Accept all" by:
+  //   - Scanning span elements for text exactly "accept all"
+  //   - Requiring an ancestor that contains "file with changes"
+  // This is highly specific to the Antigravity agent header and should be safe.
+  try {
+    var spanCandidates = document.querySelectorAll('span');
+    for (var asIdx = 0; asIdx < spanCandidates.length; asIdx++) {
+      var spanEl = spanCandidates[asIdx];
+      if (checkedElements.has(spanEl)) continue;
+
+      var spanTextRaw = (spanEl.textContent || '').trim();
+      if (!spanTextRaw) continue;
+      var spanText = spanTextRaw.toLowerCase();
+      if (spanText !== 'accept all') continue;
+
+      // Heuristic: ensure we're in the agent header area by checking for
+      // "file with changes" text somewhere up the ancestor chain.
+      var anc = spanEl.parentElement;
+      var inChangesHeader = false;
+      for (var ad = 0; ad < 12 && anc; ad++) {
+        try {
+          var ancText = (anc.textContent || '').toLowerCase();
+          if (ancText.indexOf('file with changes') !== -1) {
+            inChangesHeader = true;
+            break;
+          }
+        } catch (e) { /* ignore text errors */ }
+        anc = anc.parentElement;
+      }
+      if (!inChangesHeader) continue;
+
+      checkedElements.add(spanEl);
+      if (isInsideCodeOrProse(spanEl)) continue;
+      if (isInsideForbiddenZone(spanEl)) continue;
+      if (!isElementClickable(spanEl)) continue;
+
+      // "Accept all" here applies AI changes; treat it as an accept button.
+      try {
+        spanEl.click();
+        clickedButtons.push('accept all');
+        scanMode = scanMode === 'none' ? 'agent-accept-all' : scanMode + '+agent-accept-all';
+      } catch (e) { /* ignore */ }
     }
   } catch (e) { /* ignore */ }
 
