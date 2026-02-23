@@ -438,6 +438,8 @@ var EDITOR_DIFF_SELECTORS = [
   '.modified-in-chat',
   '.inline-chat-widget',
   '.diff-review-widget',
+  // Antigravity Implementation Plan / artifact view (Proceed button)
+  '.artifact-view',
   // Cursor-specific: composer area where Keep/Accept/Run buttons live
   '.composer-pane-controls-feedback',
   '.composer-tool-call-control-row',
@@ -725,6 +727,16 @@ function isInsideForbiddenZone(el) {
   while (parent && depth < 100) {
     var id = parent.id || '';
     var cls = (parent.className || '').toString();
+    // Allow entire Antigravity agent side panel (diff header, Accept all, etc. live here),
+    // even if the overall page is a Walkthrough.
+    if (cls.indexOf('antigravity-agent-side-panel') !== -1) {
+      return false;
+    }
+    // Allow Antigravity artifact view (Implementation Plan) — Proceed button lives here.
+    // Even if the parent page is a Walkthrough, this panel is a safe, explicit action area.
+    if (cls.indexOf('artifact-view') !== -1) {
+      return false;
+    }
     // Allow composer headers and pane controls (both IDEs)
     if (id === 'composer-files-edited-header' || cls.indexOf('composer-files-edited-header') !== -1 ||
         cls.indexOf('composer-pane-controls-feedback') !== -1) {
@@ -1031,7 +1043,28 @@ function getCommandTextForRunButton(btn) {
       }
     }
   }
-  
+
+  // Generic fallback for non-composer UIs (e.g. Antigravity "Run command?" cards)
+  // If we still don't have a container, walk up a few levels looking for a block
+  // that actually contains the command (typically a <pre> element with the command).
+  if (!container) {
+    container = btn.parentElement;
+    var fallbackDepth = 0;
+    while (container && fallbackDepth < 10) {
+      try {
+        if (container.querySelector && container.querySelector('pre')) {
+          // Found an ancestor that wraps the <pre> command block — good enough
+          break;
+        }
+      } catch (e) { /* ignore query errors */ }
+      container = container.parentElement;
+      fallbackDepth++;
+    }
+  }
+
+  // Last resort: if we still can't find container, give up
+  if (!container) return '';
+
   // Last resort: if we can't find container, try to find command editor directly
   // This handles cases where Run button is in a complex DOM structure
   if (!container) {
@@ -1824,6 +1857,7 @@ function findAndClickAcceptButtons() {
   var clickedButtons = [];
   var blockedCount = 0;
   var scanMode = 'none';
+  var scrolledInMainChat = false;
 
   // ── Branch 0.5: Antigravity chat panel in MAIN document (no iframe) ──
   // New Antigravity versions render the agent chat panel directly in the main
@@ -1855,8 +1889,8 @@ function findAndClickAcceptButtons() {
         // Button auto-accept in diff/editor areas is still handled below by
         // the generic branches (editor-diff, etc.).
 
-        // If we scrolled or did nothing else, return early with scroll info.
-        return { clicked: clickedButtons, scanMode: scanMode, scrollClicked: mainScrolled };
+        // If we scrolled, remember it; do NOT return early so other branches still run.
+        scrolledInMainChat = mainScrolled;
       }
     }
   } catch (e) { /* ignore */ }
@@ -2086,13 +2120,18 @@ function findAndClickAcceptButtons() {
       var rcText = getButtonText(rcBtn);
       if (!rcText || rcText !== 'run') continue; // Only care about real Run buttons here
 
-      // Ensure this Run button belongs to a "Run command?" confirmation card
+      // Ensure this Run button belongs to a "Run command" confirmation card
       var rcParent = rcBtn.parentElement;
       var isRunCommandCard = false;
       for (var rd = 0; rd < 15 && rcParent; rd++) {
         try {
           var rcParentText = (rcParent.textContent || '').toLowerCase();
-          if (rcParentText.indexOf('run command?') !== -1 || rcParentText.indexOf('run command ?') !== -1) {
+          // Support both old text "Run command?" and new text "Run command"
+          if (
+            rcParentText.indexOf('run command?') !== -1 ||
+            rcParentText.indexOf('run command ?') !== -1 ||
+            rcParentText.indexOf('run command') !== -1
+          ) {
             isRunCommandCard = true;
             break;
           }
@@ -2365,7 +2404,7 @@ function findAndClickAcceptButtons() {
     clicked: clickedButtons,
     blocked: blockedCount,
     scanMode: scanMode,
-    scrollClicked: scrolledInIframe
+    scrollClicked: scrolledInIframe || scrolledInMainChat
   };
   
   // Add iframe diagnostics if available
