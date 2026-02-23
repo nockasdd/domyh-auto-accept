@@ -85,6 +85,31 @@ var SCROLLBAR_DETECTION_WIDTH = 30; // Width of scrollbar detection area (pixels
 var SCROLL_POSITION_THRESHOLD = 3; // Minimum scroll change to detect drag (pixels)
 var SCROLL_DEBOUNCE_MS = 100; // Debounce time for scroll events to avoid false positives
 
+// Throttle for sensitive actions (e.g., Proceed) so they are not double-clicked
+// across multiple polling cycles while the UI is still visible.
+var PROCEED_THROTTLE_MS = 4000; // 4s is enough for Antigravity to transition the view
+
+if (typeof window !== 'undefined') {
+  window.__autoAcceptClickState = window.__autoAcceptClickState || {
+    lastProceedClick: 0,
+  };
+}
+
+function shouldSkipProceedClick() {
+  try {
+    if (typeof window === 'undefined') return false;
+    var state = window.__autoAcceptClickState || (window.__autoAcceptClickState = { lastProceedClick: 0 });
+    var now = Date.now();
+    if (now - state.lastProceedClick < PROCEED_THROTTLE_MS) {
+      return true; // Recently clicked Proceed — skip this attempt
+    }
+    state.lastProceedClick = now;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Initialize scroll state for a window (works for both main window and iframes)
 function initializeScrollState(win) {
   if (!win || typeof win === 'undefined') return;
@@ -1858,6 +1883,7 @@ function findAndClickAcceptButtons() {
   var blockedCount = 0;
   var scanMode = 'none';
   var scrolledInMainChat = false;
+  var checkedElements = new Set(); // Shared across all branches to avoid duplicate clicks
 
   // ── Branch 0.5: Antigravity chat panel in MAIN document (no iframe) ──
   // New Antigravity versions render the agent chat panel directly in the main
@@ -1870,7 +1896,6 @@ function findAndClickAcceptButtons() {
       var mainConversation = document.getElementById('conversation');
       if (mainConversation && window === window.top) {
         scanMode = 'chat-main-document';
-
         var mainUserScrolling = isUserScrolling(window);
         var mainChatScrolledUp = isChatScrolledUp(document);
         var mainScrolled = false;
@@ -1885,9 +1910,26 @@ function findAndClickAcceptButtons() {
           }
         }
 
-        // NOTE: For main-document chat we only handle scroll behavior here.
-        // Button auto-accept in diff/editor areas is still handled below by
-        // the generic branches (editor-diff, etc.).
+        // For main-document chat, also auto-click chat-panel buttons just like
+        // the iframe chat branch, but ONLY when user is not actively scrolling
+        // and the chat is not scrolled up.
+        if (!mainUserScrolling && !mainChatScrolledUp) {
+          var mainChatButtons = findChatPanelButtons();
+          for (var mcb = 0; mcb < mainChatButtons.length; mcb++) {
+            var mBtn = mainChatButtons[mcb];
+            var mText = getButtonText(mBtn);
+            if (!mText) continue;
+            // Mark as checked so later branches (editor-diff, iframe, etc.)
+            // do NOT click the same Proceed/Accept button again.
+            checkedElements.add(mBtn);
+            // Throttle Proceed so it is not double-clicked across polling cycles
+            if (mText === 'proceed' && shouldSkipProceedClick()) continue;
+            try {
+              mBtn.click();
+              clickedButtons.push(mText);
+            } catch (e) { /* ignore */ }
+          }
+        }
 
         // If we scrolled, remember it; do NOT return early so other branches still run.
         scrolledInMainChat = mainScrolled;
@@ -1986,9 +2028,14 @@ function findAndClickAcceptButtons() {
       var buttons = findChatPanelButtons();
 
       for (var i = 0; i < buttons.length; i++) {
+        var cBtn = buttons[i];
+        var cText = getButtonText(cBtn);
+        if (!cText) continue;
+        // Throttle Proceed so it is not double-clicked across polling cycles
+        if (cText === 'proceed' && shouldSkipProceedClick()) continue;
         try {
-          buttons[i].click();
-          clickedButtons.push(getButtonText(buttons[i]));
+          cBtn.click();
+          clickedButtons.push(cText);
         } catch (e) { /* ignore */ }
       }
     }
@@ -1999,7 +2046,6 @@ function findAndClickAcceptButtons() {
   // Branch 2: We're on the main workbench — scan editor diff containers
   // IMPORTANT: This branch runs regardless of IDE type to find buttons in editor diff views
   var containers = findEditorDiffContainers();
-  var checkedElements = new Set(); // Shared across all branches to avoid duplicate clicks
   if (containers.length > 0) {
     scanMode = 'editor-diff';
 
@@ -2017,6 +2063,8 @@ function findAndClickAcceptButtons() {
         if (!text) continue;
 
         if (isAcceptButton(text) && isElementClickable(btn)) {
+          // Throttle Proceed so it is not double-clicked across polling cycles
+          if (text === 'proceed' && shouldSkipProceedClick()) continue;
           // Safety gate: check dangerous commands for "run" buttons
           if (text === 'run') {
             var runCheck = shouldAllowRunButton(btn);
@@ -2182,21 +2230,41 @@ function findAndClickAcceptButtons() {
       var spanText = spanTextRaw.toLowerCase();
       if (spanText !== 'accept all') continue;
 
-      // Heuristic: ensure we're in the agent header area by checking for
-      // "file with changes" text somewhere up the ancestor chain.
+      // Heuristic 1: ensure we're inside the Antigravity agent side panel
+      // (this is where the changes header + Accept all/Reject all live).
       var anc = spanEl.parentElement;
-      var inChangesHeader = false;
-      for (var ad = 0; ad < 12 && anc; ad++) {
+      var inAgentPanel = false;
+      for (var ad = 0; ad < 20 && anc; ad++) {
         try {
-          var ancText = (anc.textContent || '').toLowerCase();
-          if (ancText.indexOf('file with changes') !== -1) {
-            inChangesHeader = true;
+          var ancCls = (anc.className || '').toString().toLowerCase();
+          if (ancCls.indexOf('antigravity-agent-side-panel') !== -1) {
+            inAgentPanel = true;
             break;
           }
         } catch (e) { /* ignore text errors */ }
         anc = anc.parentElement;
       }
-      if (!inChangesHeader) continue;
+      if (!inAgentPanel) continue;
+
+      // Heuristic 2: require a sibling "Reject all" in the same control row.
+      // This matches the Antigravity header layout and avoids relying on
+      // "1 File With Changes" vs "2 Files With Changes" text.
+      var parentRow = spanEl.parentElement;
+      var hasRejectSibling = false;
+      if (parentRow) {
+        try {
+          var sibSpans = parentRow.querySelectorAll('span');
+          for (var ss = 0; ss < sibSpans.length; ss++) {
+            if (sibSpans[ss] === spanEl) continue;
+            var sibText = (sibSpans[ss].textContent || '').trim().toLowerCase();
+            if (sibText === 'reject all') {
+              hasRejectSibling = true;
+              break;
+            }
+          }
+        } catch (e) { /* ignore sibling errors */ }
+      }
+      if (!hasRejectSibling) continue;
 
       checkedElements.add(spanEl);
       if (isInsideCodeOrProse(spanEl)) continue;
@@ -2269,6 +2337,8 @@ function findAndClickAcceptButtons() {
       var aText = getButtonText(aBtn);
       if (!aText) continue;
       if (isAcceptButton(aText) && isElementClickable(aBtn)) {
+        // Throttle Proceed so it is not double-clicked across polling cycles
+        if (aText === 'proceed' && shouldSkipProceedClick()) continue;
         // Safety gate: check dangerous commands for "run" buttons
         if (aText === 'run') {
           var runCheck = shouldAllowRunButton(aBtn);
@@ -2306,6 +2376,8 @@ function findAndClickAcceptButtons() {
         var pText = getButtonText(pBtn);
         if (!pText) continue;
         if (isAcceptButton(pText) && isElementClickable(pBtn)) {
+          // Throttle Proceed so it is not double-clicked across polling cycles
+          if (pText === 'proceed' && shouldSkipProceedClick()) continue;
           // Safety gate: check dangerous commands for "run" buttons
           if (pText === 'run') {
             var runCheck = shouldAllowRunButton(pBtn);
@@ -2343,6 +2415,8 @@ function findAndClickAcceptButtons() {
       var aaText = getButtonText(aaBtn);
       if (!aaText) continue;
       if (isAcceptButton(aaText) && isElementClickable(aaBtn)) {
+        // Throttle Proceed so it is not double-clicked across polling cycles
+        if (aaText === 'proceed' && shouldSkipProceedClick()) continue;
         // Safety gate: check dangerous commands for "run" buttons
         if (aaText === 'run') {
           var runCheck = shouldAllowRunButton(aaBtn);
