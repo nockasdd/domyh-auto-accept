@@ -2,7 +2,7 @@
   "name": "domyh-auto-accept",
   "displayName": "Domyh Auto Accept",
   "description": "Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, VS Code Copilot",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "nockasdd",
   "icon": "resources/icons/icon.png",
   "license": "MIT",
@@ -81,6 +81,26 @@
       {
         "command": "domyh-auto-accept.probeButtons",
         "title": "Domyh Auto Accept: Probe Buttons (Find Keep All)"
+      },
+      {
+        "command": "domyh-auto-accept.toggleClickRun",
+        "title": "Domyh Auto Accept: Toggle Auto-click Run"
+      },
+      {
+        "command": "domyh-auto-accept.toggleClickProceed",
+        "title": "Domyh Auto Accept: Toggle Auto-click Proceed"
+      },
+      {
+        "command": "domyh-auto-accept.toggleClickAcceptAll",
+        "title": "Domyh Auto Accept: Toggle Auto-click Accept All"
+      },
+      {
+        "command": "domyh-auto-accept.watchdog.pause",
+        "title": "Domyh Auto Accept: Pause Terminal Watchdog"
+      },
+      {
+        "command": "domyh-auto-accept.watchdog.resume",
+        "title": "Domyh Auto Accept: Resume Terminal Watchdog"
       }
     ],
     "configuration": {
@@ -194,6 +214,83 @@
           "type": "boolean",
           "default": false,
           "description": "Enable verbose debug logging"
+        },
+        "domyh-auto-accept.terminalWatchdog.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable terminal stuck detection and auto-recovery"
+        },
+        "domyh-auto-accept.terminalWatchdog.defaultTimeout": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "maximum": 600,
+          "description": "Default timeout (seconds) before considering a command stuck"
+        },
+        "domyh-auto-accept.terminalWatchdog.longTimeout": {
+          "type": "number",
+          "default": 180,
+          "description": "Timeout for test/build commands (seconds)"
+        },
+        "domyh-auto-accept.terminalWatchdog.installTimeout": {
+          "type": "number",
+          "default": 600,
+          "description": "Timeout for heavy install/build commands (seconds)"
+        },
+        "domyh-auto-accept.terminalWatchdog.recoveryStrategy": {
+          "type": "string",
+          "enum": [
+            "enter-only",
+            "escalating",
+            "kill-only"
+          ],
+          "default": "escalating",
+          "description": "Recovery strategy: enter-only (gentle), escalating (Enter→Ctrl+C→Kill), kill-only (aggressive)"
+        },
+        "domyh-auto-accept.terminalWatchdog.maxRetries": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Max recovery attempts before killing terminal"
+        },
+        "domyh-auto-accept.terminalWatchdog.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "docker",
+            "ssh",
+            "tail -f",
+            "watch",
+            "npm run dev",
+            "yarn dev",
+            "pnpm dev",
+            "nuxt dev",
+            "next dev",
+            "vite dev"
+          ],
+          "description": "Commands matching these patterns are excluded from watchdog (they're expected to run long)"
+        },
+        "domyh-auto-accept.terminalWatchdog.uiMismatchRecovery.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable fallback terminal reload when long-running commands end too quickly but UI may still be stuck in running state"
+        },
+        "domyh-auto-accept.terminalWatchdog.uiMismatchRecovery.quickEndMs": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 200,
+          "maximum": 10000,
+          "description": "Threshold (ms): command end faster than this is considered suspicious for long-running commands"
+        },
+        "domyh-auto-accept.terminalWatchdog.uiMismatchRecovery.graceMs": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1000,
+          "maximum": 30000,
+          "description": "Grace period (ms) before watchdog reloads terminal in UI-mismatch recovery mode"
         }
       }
     },

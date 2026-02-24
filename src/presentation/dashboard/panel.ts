@@ -12,6 +12,8 @@ import * as vscode from 'vscode';
 import { IEventBus } from '../../domain/interfaces/event-bus';
 import { DisposableStore } from '../../core/disposable';
 import { SessionStats } from '../../domain/types/stats';
+import { RuntimeConfigService } from '../../application/runtime-config-service';
+import { TerminalWatchdog } from '../../infrastructure/terminal/watchdog';
 
 export class DashboardPanel {
   private static instance: DashboardPanel | undefined;
@@ -20,6 +22,8 @@ export class DashboardPanel {
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private readonly eventBus: IEventBus,
+    private readonly runtimeConfigService?: RuntimeConfigService,
+    private readonly watchdog?: TerminalWatchdog,
   ) {
     this.setupMessageBridge();
 
@@ -28,6 +32,10 @@ export class DashboardPanel {
       DashboardPanel.instance = undefined;
       this.disposables.dispose();
     });
+
+    // Push initial runtime config and watchdog status
+    this.pushRuntimeConfig();
+    this.pushWatchdogStatus();
   }
 
   // ── Singleton factory ────────────────────────────
@@ -36,6 +44,8 @@ export class DashboardPanel {
     extensionUri: vscode.Uri,
     eventBus: IEventBus,
     initialState?: { stats?: SessionStats; engineState?: string },
+    runtimeConfigService?: RuntimeConfigService,
+    watchdog?: TerminalWatchdog,
   ): void {
     if (DashboardPanel.instance) {
       DashboardPanel.instance.panel.reveal();
@@ -43,6 +53,8 @@ export class DashboardPanel {
       if (initialState) {
         DashboardPanel.instance.pushState(initialState);
       }
+      DashboardPanel.instance.pushRuntimeConfig();
+      DashboardPanel.instance.pushWatchdogStatus();
       return;
     }
 
@@ -58,7 +70,7 @@ export class DashboardPanel {
     );
 
     panel.webview.html = DashboardPanel.getHtmlContent(panel.webview);
-    DashboardPanel.instance = new DashboardPanel(panel, eventBus);
+    DashboardPanel.instance = new DashboardPanel(panel, eventBus, runtimeConfigService, watchdog);
 
     // Push initial state after a brief delay to let webview initialize
     if (initialState) {
@@ -76,6 +88,35 @@ export class DashboardPanel {
     if (state.engineState) {
       this.panel.webview.postMessage({ type: 'state', data: state.engineState });
     }
+  }
+
+  /** Push runtime config to webview */
+  private pushRuntimeConfig(): void {
+    if (!this.runtimeConfigService) return;
+    const config = this.runtimeConfigService.get();
+    this.panel.webview.postMessage({
+      type: 'runtimeConfig',
+      data: {
+        clickRun: config.clickRun,
+        clickProceed: config.clickProceed,
+        clickAcceptAll: config.clickAcceptAll,
+        clickAllowOnce: config.clickAllowOnce,
+        clickAllowConversation: config.clickAllowConversation,
+        clickSend: config.clickSend,
+        enabled: config.enabled,
+      },
+    });
+  }
+
+  /** Push watchdog status to webview */
+  private pushWatchdogStatus(): void {
+    if (!this.watchdog) return;
+    this.panel.webview.postMessage({
+      type: 'watchdog',
+      data: {
+        enabled: this.watchdog.isRuntimeEnabled(),
+      },
+    });
   }
 
   // ── Message Bridge ───────────────────────────────
@@ -150,13 +191,36 @@ export class DashboardPanel {
       }),
     );
 
+    // Runtime config changes → WebView
+    this.disposables.add(
+      this.eventBus.on('runtimeConfig:changed', () => {
+        this.pushRuntimeConfig();
+      }),
+    );
+
     // WebView → Extension (user actions)
     this.disposables.add(
       this.panel.webview.onDidReceiveMessage(
-        (msg: { type: string }) => {
+        (msg: { type: string; action?: string }) => {
           switch (msg.type) {
             case 'toggle':
               vscode.commands.executeCommand('domyh-auto-accept.toggle');
+              break;
+            case 'toggleRuntimeConfig':
+              if (msg.action) {
+                vscode.commands.executeCommand(`domyh-auto-accept.toggleClick${msg.action}`);
+              }
+              break;
+            case 'toggleWatchdog':
+              if (this.watchdog) {
+                if (this.watchdog.isRuntimeEnabled()) {
+                  vscode.commands.executeCommand('domyh-auto-accept.watchdog.pause');
+                } else {
+                  vscode.commands.executeCommand('domyh-auto-accept.watchdog.resume');
+                }
+                // Update status after a brief delay
+                setTimeout(() => this.pushWatchdogStatus(), 100);
+              }
               break;
             case 'startQueue':
               vscode.commands.executeCommand('domyh-auto-accept.startQueue');
@@ -211,8 +275,9 @@ export class DashboardPanel {
       font-family: var(--vscode-font-family, 'Segoe UI', sans-serif);
       background: var(--bg);
       color: var(--fg);
-      padding: 16px;
+      padding: 12px;
       min-height: 100vh;
+      font-size: 13px;
     }
 
     /* Header */
@@ -220,23 +285,52 @@ export class DashboardPanel {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 20px;
-      padding-bottom: 12px;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
       border-bottom: 1px solid var(--border);
     }
     .header h1 {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 600;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
-    .header-right { display: flex; align-items: center; gap: 8px; }
+    .header-right { 
+      display: flex; 
+      align-items: center; 
+      gap: 6px; 
+    }
+    .icon-btn {
+      width: 32px; 
+      height: 32px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--card);
+      color: var(--fg);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      padding: 0;
+      font-size: 16px;
+    }
+    .icon-btn:hover {
+      background: var(--border);
+      transform: scale(1.05);
+    }
+    .icon-btn.active {
+      background: var(--accent);
+      color: #1e1e2e;
+      border-color: var(--accent);
+    }
     .badge {
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 10px;
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 12px;
       font-weight: 500;
+      white-space: nowrap;
     }
     .badge.active { background: var(--success); color: #1e1e2e; }
     .badge.idle { background: var(--border); color: var(--fg); }
@@ -246,30 +340,32 @@ export class DashboardPanel {
     /* Stats Grid */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 10px;
-      margin-bottom: 16px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
     }
     .stat-card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 12px;
+      padding: 10px;
       text-align: center;
       transition: transform 0.2s, box-shadow 0.2s;
+      cursor: help;
     }
     .stat-card:hover {
       transform: translateY(-2px);
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
     .stat-value {
-      font-size: 24px;
+      font-size: 20px;
       font-weight: 700;
       color: var(--accent);
       font-variant-numeric: tabular-nums;
+      line-height: 1.2;
     }
     .stat-label {
-      font-size: 10px;
+      font-size: 9px;
       color: var(--muted);
       margin-top: 4px;
       text-transform: uppercase;
@@ -281,73 +377,149 @@ export class DashboardPanel {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 14px;
-      margin-bottom: 12px;
+      padding: 12px;
+      margin-bottom: 10px;
     }
     .section-title {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       margin-bottom: 10px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
       opacity: 0.8;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
-    /* CDP Status */
-    .cdp-status {
+    /* Compact Info Row */
+    .info-row {
       display: flex;
       align-items: center;
       gap: 8px;
       font-size: 12px;
+      margin-bottom: 8px;
     }
-    .cdp-dot {
-      width: 8px; height: 8px;
+    .info-row:last-child {
+      margin-bottom: 0;
+    }
+    .info-label {
+      color: var(--muted);
+      min-width: 80px;
+    }
+    .info-value {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 8px; 
+      height: 8px;
       border-radius: 50%;
       background: var(--border);
       flex-shrink: 0;
     }
-    .cdp-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
-    .cdp-dot.disconnected { background: var(--error); }
-    .cdp-dot.reconnecting { background: var(--warning); animation: pulse 1.5s infinite; }
+    .status-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .status-dot.disconnected { background: var(--error); }
+    .status-dot.reconnecting { background: var(--warning); animation: pulse 1.5s infinite; }
     @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+    /* Toggle Switch */
+    .toggle-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 12px;
+    }
+    .toggle-switch input[type="checkbox"] {
+      display: none;
+    }
+    .toggle-switch .slider {
+      width: 36px;
+      height: 20px;
+      background: var(--border);
+      border-radius: 10px;
+      position: relative;
+      transition: background 0.2s;
+    }
+    .toggle-switch .slider::before {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--fg);
+      top: 2px;
+      left: 2px;
+      transition: transform 0.2s;
+    }
+    .toggle-switch input:checked + .slider {
+      background: var(--accent);
+    }
+    .toggle-switch input:checked + .slider::before {
+      transform: translateX(16px);
+      background: #1e1e2e;
+    }
+    .toggle-switch .label {
+      color: var(--fg);
+    }
 
     /* Progress Bar */
     .progress-bar {
-      width: 100%; height: 6px;
-      background: var(--border); border-radius: 3px;
-      margin: 8px 0; overflow: hidden;
+      width: 100%; 
+      height: 4px;
+      background: var(--border); 
+      border-radius: 2px;
+      margin: 6px 0; 
+      overflow: hidden;
     }
     .progress-fill {
       height: 100%;
       background: linear-gradient(90deg, var(--accent), var(--success));
-      border-radius: 3px;
+      border-radius: 2px;
       transition: width 0.4s ease;
     }
-    .queue-info { font-size: 12px; opacity: 0.7; margin-bottom: 10px; }
+    .queue-info { 
+      font-size: 11px; 
+      opacity: 0.7; 
+      margin-bottom: 6px; 
+    }
 
     /* Buttons */
-    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-row { 
+      display: flex; 
+      gap: 6px; 
+      flex-wrap: wrap; 
+    }
     .btn {
-      padding: 6px 12px;
+      padding: 5px 10px;
       border: 1px solid var(--border);
       border-radius: var(--radius);
       background: var(--card);
       color: var(--fg);
       cursor: pointer;
-      font-size: 12px;
+      font-size: 11px;
       transition: background 0.2s;
     }
     .btn:hover { background: var(--border); }
     .btn.primary {
-      background: var(--accent); color: #1e1e2e;
+      background: var(--accent); 
+      color: #1e1e2e;
       border-color: var(--accent);
     }
     .btn.primary:hover { opacity: 0.9; }
 
     /* Activity Log */
-    .log-list { list-style: none; max-height: 180px; overflow-y: auto; }
+    .log-list { 
+      list-style: none; 
+      max-height: 150px; 
+      overflow-y: auto; 
+    }
     .log-item {
-      padding: 5px 0;
+      padding: 4px 0;
       border-bottom: 1px solid var(--border);
       font-size: 11px;
       display: flex;
@@ -355,13 +527,29 @@ export class DashboardPanel {
       gap: 8px;
     }
     .log-item:last-child { border-bottom: none; }
-    .log-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .log-time { opacity: 0.4; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+    .log-msg { 
+      flex: 1; 
+      overflow: hidden; 
+      text-overflow: ellipsis; 
+      white-space: nowrap; 
+    }
+    .log-time { 
+      opacity: 0.4; 
+      font-variant-numeric: tabular-nums; 
+      flex-shrink: 0; 
+      font-size: 10px;
+    }
 
-    /* Meta Info */
-    .meta-row {
-      display: flex; gap: 16px; font-size: 11px;
-      color: var(--muted); margin-top: 8px;
+    /* Two Column Layout */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (max-width: 600px) {
+      .two-col {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -370,6 +558,8 @@ export class DashboardPanel {
   <div class="header">
     <h1>⚡ Domyh Auto Accept</h1>
     <div class="header-right">
+      <button class="icon-btn" onclick="send('toggle')" title="Toggle Engine On/Off" id="toggleBtn">▶</button>
+      <button class="icon-btn" onclick="send('openSettings')" title="Open Settings">⚙</button>
       <span id="cdpBadge" class="badge idle">CDP: —</span>
       <span id="stateBadge" class="badge idle">Idle</span>
     </div>
@@ -377,49 +567,52 @@ export class DashboardPanel {
 
   <!-- Stats Grid -->
   <div class="stats-grid">
-    <div class="stat-card">
+    <div class="stat-card" title="Total buttons clicked automatically">
       <div id="statClicks" class="stat-value">0</div>
       <div class="stat-label">Clicks</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" title="Dangerous commands blocked">
       <div id="statBlocked" class="stat-value" style="color: var(--error)">0</div>
       <div class="stat-label">Blocked</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" title="Retry attempts">
       <div id="statRetries" class="stat-value" style="color: var(--warning)">0</div>
       <div class="stat-label">Retries</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" title="Scheduled prompts sent">
       <div id="statPrompts" class="stat-value" style="color: var(--success)">0</div>
       <div class="stat-label">Prompts</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" title="Estimated time saved (5s per click)">
       <div id="statTimeSaved" class="stat-value" style="color: var(--accent)">0s</div>
       <div class="stat-label">Time Saved</div>
     </div>
-    <div class="stat-card">
-      <div id="statUptime" class="stat-value" style="font-size: 18px; color: var(--muted)">—</div>
+    <div class="stat-card" title="Session uptime">
+      <div id="statUptime" class="stat-value" style="font-size: 16px; color: var(--muted)">—</div>
       <div class="stat-label">Uptime</div>
     </div>
   </div>
 
-  <!-- CDP Status -->
+  <!-- Connection & Queue -->
   <div class="section">
-    <div class="section-title">🔌 Connection</div>
-    <div class="cdp-status">
-      <span id="cdpDot" class="cdp-dot"></span>
-      <span id="cdpText">Not connected</span>
+    <div class="section-title">🔌 Connection & Queue</div>
+    <div class="info-row">
+      <span class="info-label">CDP:</span>
+      <div class="info-value">
+        <span id="cdpDot" class="status-dot"></span>
+        <span id="cdpText">Not connected</span>
+      </div>
     </div>
-  </div>
-
-  <!-- Queue Panel -->
-  <div class="section">
-    <div class="section-title">📋 Queue</div>
-    <div id="queueInfo" class="queue-info">No queue active</div>
+    <div class="info-row">
+      <span class="info-label">Queue:</span>
+      <div class="info-value">
+        <span id="queueInfo">No queue active</span>
+      </div>
+    </div>
     <div class="progress-bar">
       <div id="queueProgress" class="progress-fill" style="width: 0%"></div>
     </div>
-    <div class="btn-row">
+    <div class="btn-row" style="margin-top: 8px;">
       <button class="btn primary" onclick="send('startQueue')">▶ Start</button>
       <button class="btn" onclick="send('pauseQueue')">⏸ Pause</button>
       <button class="btn" onclick="send('resumeQueue')">▶ Resume</button>
@@ -428,12 +621,54 @@ export class DashboardPanel {
     </div>
   </div>
 
-  <!-- Controls -->
-  <div class="section">
-    <div class="section-title">⚙ Controls</div>
-    <div class="btn-row">
-      <button class="btn primary" onclick="send('toggle')">Toggle Engine</button>
-      <button class="btn" onclick="send('openSettings')">⚙ Settings</button>
+  <!-- Runtime Config & Watchdog -->
+  <div class="two-col">
+    <!-- Runtime Config -->
+    <div class="section">
+      <div class="section-title">⚙️ Runtime Config</div>
+      <div class="info-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleRun" onchange="toggleRuntime('Run')">
+          <span class="slider"></span>
+          <span class="label">Run</span>
+        </label>
+      </div>
+      <div class="info-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleProceed" onchange="toggleRuntime('Proceed')">
+          <span class="slider"></span>
+          <span class="label">Proceed</span>
+        </label>
+      </div>
+      <div class="info-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleAcceptAll" onchange="toggleRuntime('AcceptAll')">
+          <span class="slider"></span>
+          <span class="label">Accept All</span>
+        </label>
+      </div>
+      <div class="info-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleAllowOnce" onchange="toggleRuntime('AllowOnce')">
+          <span class="slider"></span>
+          <span class="label">Allow Once</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Watchdog -->
+    <div class="section">
+      <div class="section-title">🐕 Terminal Watchdog(Beta Test)</div>
+      <div class="info-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleWatchdog" onchange="toggleWatchdog()">
+          <span class="slider"></span>
+          <span class="label">Enabled</span>
+        </label>
+      </div>
+      <div class="info-row" style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+        Monitors terminal commands and recovers from stuck processes
+      </div>
     </div>
   </div>
 
@@ -450,7 +685,15 @@ export class DashboardPanel {
 
   <script>
     const vscode = acquireVsCodeApi();
-    function send(type) { vscode.postMessage({ type }); }
+    function send(type, action) { 
+      vscode.postMessage({ type, action }); 
+    }
+    function toggleRuntime(action) {
+      send('toggleRuntimeConfig', action);
+    }
+    function toggleWatchdog() {
+      send('toggleWatchdog');
+    }
 
     let sessionStart = 0;
     let lastClickTime = 0;
@@ -513,7 +756,6 @@ export class DashboardPanel {
           document.getElementById('statRetries').textContent = data.retriesAttempted || 0;
           document.getElementById('statPrompts').textContent = data.promptsSent || 0;
           document.getElementById('statTimeSaved').textContent = formatTimeSaved(data.estimatedTimeSaved || 0);
-          // Update sessionStart if provided (important for initial state)
           if (data.sessionStartTime && data.sessionStartTime > 0) {
             sessionStart = data.sessionStartTime;
           }
@@ -522,8 +764,13 @@ export class DashboardPanel {
 
         case 'state': {
           var badge = document.getElementById('stateBadge');
+          var toggleBtn = document.getElementById('toggleBtn');
           badge.textContent = data;
           badge.className = 'badge ' + (data === 'polling' || data === 'connected' ? 'active' : 'idle');
+          if (toggleBtn) {
+            toggleBtn.className = 'icon-btn' + (data === 'polling' ? ' active' : '');
+            toggleBtn.title = data === 'polling' ? 'Engine: ON — Click to stop' : 'Engine: OFF — Click to start';
+          }
           addLog('State: ' + data);
           break;
         }
@@ -532,18 +779,44 @@ export class DashboardPanel {
           var dot = document.getElementById('cdpDot');
           var txt = document.getElementById('cdpText');
           var cdpBadge = document.getElementById('cdpBadge');
-          dot.className = 'cdp-dot ' + data.status;
+          dot.className = 'status-dot ' + data.status;
           if (data.status === 'connected') {
             txt.textContent = 'Connected (port ' + data.port + ', ' + data.targets + ' targets)';
-            cdpBadge.textContent = 'CDP: ✓'; cdpBadge.className = 'badge active';
+            cdpBadge.textContent = 'CDP: ✓'; 
+            cdpBadge.className = 'badge active';
           } else if (data.status === 'reconnecting') {
             txt.textContent = 'Reconnecting (#' + data.attempt + ', delay ' + (data.delay/1000) + 's)';
-            cdpBadge.textContent = 'CDP: ↻'; cdpBadge.className = 'badge warning';
+            cdpBadge.textContent = 'CDP: ↻'; 
+            cdpBadge.className = 'badge warning';
           } else {
             txt.textContent = 'Disconnected' + (data.reason ? ': ' + data.reason : '');
-            cdpBadge.textContent = 'CDP: ✗'; cdpBadge.className = 'badge error';
+            cdpBadge.textContent = 'CDP: ✗'; 
+            cdpBadge.className = 'badge error';
           }
           addLog('CDP: ' + data.status);
+          break;
+        }
+
+        case 'runtimeConfig': {
+          if (data.clickRun !== undefined) {
+            document.getElementById('toggleRun').checked = data.clickRun;
+          }
+          if (data.clickProceed !== undefined) {
+            document.getElementById('toggleProceed').checked = data.clickProceed;
+          }
+          if (data.clickAcceptAll !== undefined) {
+            document.getElementById('toggleAcceptAll').checked = data.clickAcceptAll;
+          }
+          if (data.clickAllowOnce !== undefined) {
+            document.getElementById('toggleAllowOnce').checked = data.clickAllowOnce;
+          }
+          break;
+        }
+
+        case 'watchdog': {
+          if (data.enabled !== undefined) {
+            document.getElementById('toggleWatchdog').checked = data.enabled;
+          }
           break;
         }
 

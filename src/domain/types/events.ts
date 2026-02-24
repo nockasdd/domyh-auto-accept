@@ -39,4 +39,10 @@ export interface EventMap {
   // Permission events
   'permission:autoAllowed': { dialogType: string };
   'permission:blocked': { dialogType: string; reason: string };
+
+  // Runtime config events
+  'runtimeConfig:changed': {
+    old: import('./auto-accept-config').AutoAcceptRuntimeConfig;
+    new: import('./auto-accept-config').AutoAcceptRuntimeConfig;
+  };
 }

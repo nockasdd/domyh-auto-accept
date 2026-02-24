@@ -1,5 +1,112 @@
 # Changelog
 
+## [1.0.5] — 2026-02-24
+
+### 🐕 Terminal Watchdog
+
+- **Terminal Stuck Detection** — Monitors terminal shell executions and automatically recovers from stuck commands
+  - Tracks commands via `onDidStartTerminalShellExecution` / `onDidEndTerminalShellExecution` events
+  - Detects commands exceeding timeout (60s default, 180s for test/build, 600s for install)
+  - Escalating recovery strategy: Enter → Ctrl+C → Kill terminal
+  - Configurable recovery strategies: `enter-only`, `escalating`, `kill-only`
+- **Command Classification** — Smart timeout selection based on command type
+  - Normal commands: 60s timeout
+  - Test/Build commands (`go test`, `npm run build`): 180s timeout
+  - Install commands (`npm install`, `pip install`): 600s timeout
+- **Ephemeral Command Filtering** — Automatically ignores short-lived commands
+  - Filters: `cd`, `chdir`, `pwd`, `ls`, `dir`, `cls`, `clear`
+  - Reduces log noise and false positives
+- **Exclude Patterns** — Configurable list of long-running commands to exclude
+  - Default excludes: `docker`, `ssh`, `tail -f`, `watch`, dev servers (`npm run dev`, `yarn dev`, etc.)
+  - Prevents false positives for intentionally long-running commands
+- **User Interaction Safety** — Respects manual terminal interaction
+  - Skips first recovery attempt if user has interacted with terminal
+  - Prevents interference with manual work
+- **Runtime Controls** — Pause/resume watchdog without restarting extension
+  - Commands: `Domyh Auto Accept: Pause/Resume Terminal Watchdog`
+  - Useful during manual terminal work
+
+### 🔄 UI Mismatch Recovery (Opt-in)
+
+- **UI/Terminal State Mismatch Detection** — Detects when terminal UI shows "Running command" but shell events indicate completion
+  - Engine tracks "Running command" cards via CDP payload detector
+  - Triggers recovery when mismatch persists for 5+ consecutive polls
+  - Grace period (8s default) allows new command events to arrive before recovery
+- **Automatic Terminal Reload** — Reloads terminal when UI mismatch is confirmed
+  - Only triggers if no new command starts during grace period
+  - Respects user interaction (skips if terminal is interacted with)
+  - Disabled by default (opt-in via `terminalWatchdog.uiMismatchRecovery.enabled`)
+- **Fast-End Warning** — Logs warning when long-running commands end unusually fast
+  - Detects commands like `go test`, `npm run build` ending in <2s
+  - Indicates potential early failure or UI mismatch
+
+### ⚙️ Runtime Configuration Service
+
+- **Instant Toggle Support** — Runtime configuration changes without window reload
+  - `RuntimeConfigService` manages in-memory configuration state
+  - Engine pushes updated config to all CDP targets via `window.__autoAcceptConfig`
+  - Payload script reads config dynamically on each poll
+- **Runtime Toggle Commands** — New commands for instant feature toggles
+  - `Domyh Auto Accept: Toggle Auto-click Run` — Instantly enable/disable Run button auto-click
+  - `Domyh Auto Accept: Toggle Auto-click Proceed` — Instantly enable/disable Proceed button auto-click
+  - `Domyh Auto Accept: Toggle Auto-click Accept All` — Instantly enable/disable Accept All button auto-click
+- **Config Change Events** — Automatic config reload when VS Code settings change
+  - `RuntimeConfigService` listens to `config.onDidChange` events
+  - Emits `runtimeConfig:changed` event for engine to push updates
+  - Seamless integration with existing settings UI
+
+### 🔍 Engine-Watchdog Integration
+
+- **UI Mismatch Telemetry** — Engine tracks "Running command" cards from payload
+  - Payload detector (`detectRunningCommandCards()`) finds "Running command" UI cards
+  - Engine tracks consecutive polls with UI mismatch
+  - Triggers watchdog recovery when threshold (5 polls) exceeded
+- **Watchdog Public API** — `triggerUIMismatchRecovery()` method for external triggers
+  - Engine can trigger recovery when UI mismatch detected
+  - Supports single terminal or all tracked terminals
+  - Respects watchdog runtime enabled state
+
+### 🐛 Bug Fixes
+
+- **Fixed Infinite Skip Bug** — Watchdog now correctly handles user interaction skip logic
+  - `skippedDueToInteraction` flag ensures only first recovery is skipped
+  - Prevents infinite skipping that could prevent recovery
+- **Improved Command End Detection** — Better handling of fast-ending commands
+  - Captures exit code from `TerminalShellExecutionEndEvent`
+  - Logs exit code for debugging
+  - Warns when long-running commands end unusually fast
+
+### 📝 Configuration
+
+- **New Settings**:
+  - `domyh-auto-accept.terminalWatchdog.enabled` — Enable/disable watchdog (default: `true`)
+  - `domyh-auto-accept.terminalWatchdog.defaultTimeout` — Default timeout in seconds (default: `60`)
+  - `domyh-auto-accept.terminalWatchdog.longTimeout` — Timeout for test/build commands (default: `180`)
+  - `domyh-auto-accept.terminalWatchdog.installTimeout` — Timeout for install commands (default: `600`)
+  - `domyh-auto-accept.terminalWatchdog.recoveryStrategy` — Recovery strategy (default: `"escalating"`)
+  - `domyh-auto-accept.terminalWatchdog.maxRetries` — Max recovery attempts (default: `3`)
+  - `domyh-auto-accept.terminalWatchdog.excludePatterns` — Commands to exclude from monitoring
+  - `domyh-auto-accept.terminalWatchdog.uiMismatchRecovery.enabled` — Enable UI mismatch recovery (default: `false`)
+  - `domyh-auto-accept.terminalWatchdog.uiMismatchRecovery.quickEndMs` — Quick-end threshold (default: `2000`)
+  - `domyh-auto-accept.terminalWatchdog.uiMismatchRecovery.graceMs` — Grace period before recovery (default: `8000`)
+
+### 🔧 Technical Improvements
+
+- **Payload Script Enhancement** — Added `detectRunningCommandCards()` function
+  - Detects "Running command" cards with Cancel button
+  - Returns telemetry (`uiRunningCommand`, `uiRunningCommandCount`) to engine
+  - Helps identify UI/terminal state mismatches
+- **Engine State Tracking** — Added `consecutiveUIRunningCommandCount` tracking
+  - Tracks consecutive polls with UI mismatch
+  - Resets when mismatch clears
+  - Triggers recovery at threshold (5 polls)
+- **Watchdog Architecture** — Clean separation of concerns
+  - `TerminalWatchdog` handles terminal event monitoring
+  - `AutoAcceptEngine` handles UI detection via CDP
+  - Integration via public API (`triggerUIMismatchRecovery()`)
+
+---
+
 ## [1.0.3] — 2026-02-23
 
 ### Antigravity 1.18.4 Compatibility
@@ -19,6 +126,8 @@
   - Respects forbidden zones and clickability checks to avoid mis-clicks
 
 > Tested with **Antigravity Version: 1.18.4**
+
+---
 
 ## [1.0.2] — 2026-02-23
 
@@ -91,6 +200,8 @@
 
 - Initial Cursor support with basic button detection
 - Terminal Run button detection (initial implementation)
+
+---
 
 ## [1.0.0] — 2026-02-17
 

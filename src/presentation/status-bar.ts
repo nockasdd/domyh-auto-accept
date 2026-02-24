@@ -10,6 +10,8 @@ import { EngineState } from '../domain/enums';
 import { IEventBus } from '../domain/interfaces/event-bus';
 import { SessionStats } from '../domain/types/stats';
 import { DisposableStore } from '../core/disposable';
+import { RuntimeConfigService } from '../application/runtime-config-service';
+import { TerminalWatchdog } from '../infrastructure/terminal/watchdog';
 
 const STATE_ICONS: Record<EngineState, string> = {
   [EngineState.Idle]: '$(circle-outline)',
@@ -33,8 +35,14 @@ export class StatusBar {
   private readonly disposables = new DisposableStore();
   private clicks = 0;
   private queueInfo: { index: number; total: number } | null = null;
+  private watchdogEnabled = true;
+  private runtimeConfig: { clickRun: boolean; clickProceed: boolean; clickAcceptAll: boolean } | null = null;
 
-  constructor(eventBus: IEventBus) {
+  constructor(
+    eventBus: IEventBus,
+    runtimeConfigService?: RuntimeConfigService,
+    watchdog?: TerminalWatchdog,
+  ) {
     this.item = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Right,
       100,
@@ -72,6 +80,38 @@ export class StatusBar {
       }),
     );
 
+    // Watchdog state tracking
+    if (watchdog) {
+      this.watchdogEnabled = watchdog.isRuntimeEnabled();
+      // Note: Watchdog doesn't emit events, so we track it via periodic check
+      setInterval(() => {
+        const newState = watchdog.isRuntimeEnabled();
+        if (newState !== this.watchdogEnabled) {
+          this.watchdogEnabled = newState;
+          this.refreshTooltip();
+        }
+      }, 2000);
+    }
+
+    // Runtime config tracking
+    if (runtimeConfigService) {
+      this.runtimeConfig = {
+        clickRun: runtimeConfigService.get().clickRun,
+        clickProceed: runtimeConfigService.get().clickProceed,
+        clickAcceptAll: runtimeConfigService.get().clickAcceptAll,
+      };
+      this.disposables.add(
+        eventBus.on('runtimeConfig:changed', ({ new: newConfig }) => {
+          this.runtimeConfig = {
+            clickRun: newConfig.clickRun,
+            clickProceed: newConfig.clickProceed,
+            clickAcceptAll: newConfig.clickAcceptAll,
+          };
+          this.refreshTooltip();
+        }),
+      );
+    }
+
     this.updateState(EngineState.Idle);
     this.item.show();
   }
@@ -86,15 +126,41 @@ export class StatusBar {
   private updateStats(stats: SessionStats): void {
     this.clicks = stats.totalClicks;
     this.refreshText();
-    this.item.tooltip = [
+    this.refreshTooltip(stats);
+  }
+
+  private refreshTooltip(stats?: SessionStats): void {
+    const lines: string[] = [
       `Domyh Auto Accept — Click to toggle`,
       `────────────────`,
-      `✅ Clicks: ${stats.totalClicks}`,
-      `🚫 Blocked: ${stats.blockedCommands}`,
-      `🔄 Retries: ${stats.retriesAttempted}`,
-      `⏱️ Time saved: ~${stats.estimatedTimeSaved}s`,
-      this.queueInfo ? `📋 Queue: ${this.queueInfo.index + 1}/${this.queueInfo.total}` : '',
-    ].filter(Boolean).join('\n');
+    ];
+
+    if (stats) {
+      lines.push(
+        `✅ Clicks: ${stats.totalClicks}`,
+        `🚫 Blocked: ${stats.blockedCommands}`,
+        `🔄 Retries: ${stats.retriesAttempted}`,
+        `⏱️ Time saved: ~${stats.estimatedTimeSaved}s`,
+        this.queueInfo ? `📋 Queue: ${this.queueInfo.index + 1}/${this.queueInfo.total}` : '',
+      );
+    }
+
+    if (this.runtimeConfig) {
+      lines.push(
+        `────────────────`,
+        `⚙️ Runtime Config:`,
+        `  ${this.runtimeConfig.clickRun ? '✅' : '❌'} Run`,
+        `  ${this.runtimeConfig.clickProceed ? '✅' : '❌'} Proceed`,
+        `  ${this.runtimeConfig.clickAcceptAll ? '✅' : '❌'} Accept All`,
+      );
+    }
+
+    lines.push(
+      `────────────────`,
+      `🐕 Watchdog: ${this.watchdogEnabled ? '✅ Enabled' : '⏸️ Paused'}`,
+    );
+
+    this.item.tooltip = lines.filter(Boolean).join('\n');
   }
 
   private refreshText(): void {

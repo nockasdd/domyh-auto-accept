@@ -30,10 +30,12 @@ import { CursorAdapter } from './infrastructure/adapters/cursor';
 import { WindsurfAdapter } from './infrastructure/adapters/windsurf';
 import { TraeAdapter } from './infrastructure/adapters/trae';
 import { VSCodeCopilotAdapter } from './infrastructure/adapters/vscode-copilot';
+import { TerminalWatchdog } from './infrastructure/terminal/watchdog';
 import { StatusBar } from './presentation/status-bar';
 import { DashboardPanel } from './presentation/dashboard/panel';
 import { NotificationManager } from './presentation/notifications';
 import { IEventBus } from './domain/interfaces/event-bus';
+import { RuntimeConfigService } from './application/runtime-config-service';
 
 const disposables = new DisposableStore();
 
@@ -176,7 +178,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     container.register(Tokens.SmartFocus, () => smartFocus!);
   }
 
-  // ── 5. Create the engine ─────────────────────────
+  // ── 5. Create runtime config service (Phase 3: instant toggle support) ──
+  // Must be created before engine so engine can receive it.
+  const runtimeConfigService = new RuntimeConfigService(config, eventBus, logger);
+  disposables.add(runtimeConfigService);
+
+  // ── 5d. Start terminal watchdog (Windows terminal hang protection) ──
+  const watchdog = new TerminalWatchdog(fullConfig.terminalWatchdog, logger);
+  watchdog.start();
+  disposables.add(watchdog);
+
+  // ── 5b. Create the engine ─────────────────────────
   const fallbackAdapter = adapter ?? new AntigravityAdapter();
   const engine = new AutoAcceptEngine(
     fallbackAdapter,
@@ -187,19 +199,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     payloads,
     config,
     logger,
+    runtimeConfigService, // Pass service so engine can read instant toggle state
+    watchdog, // Pass watchdog for UI mismatch recovery
   );
   container.register(Tokens.Engine, () => engine);
 
-  // ── 5b. Create the scheduler ────────────────────
+  // ── 5c. Create the scheduler ────────────────────
   const scheduler = new Scheduler(cdp, eventBus, payloads, config, logger);
   container.register(Tokens.Scheduler, () => scheduler);
 
   // ── 6. UI ────────────────────────────────────────
-  const statusBar = new StatusBar(eventBus);
+  const statusBar = new StatusBar(eventBus, runtimeConfigService, watchdog);
   disposables.add(statusBar);
 
   // ── 7. Register commands ─────────────────────────
-  registerCommands(context, engine, scheduler, eventBus, logger);
+  registerCommands(context, engine, scheduler, eventBus, runtimeConfigService, watchdog);
 
   // ── 8. Subscribe to config changes ───────────────
   disposables.add(
@@ -207,6 +221,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const newConfig = config.getAll();
       logger.setDebugMode(newConfig.debugMode);
       logger.info('Configuration reloaded');
+
+      // Reload runtime config service (will emit event → engine pushes to payload)
+      runtimeConfigService.reload();
+    }),
+  );
+
+  // ── 8b. Subscribe to runtime config changes (Phase 3: instant toggle) ──
+  // When runtime config changes (from service.update() or service.reload()),
+  // engine will push new config to all CDP targets immediately.
+  disposables.add(
+    eventBus.on('runtimeConfig:changed', () => {
+      void engine.pushRuntimeConfig();
     }),
   );
 
@@ -248,8 +274,9 @@ function registerCommands(
   context: vscode.ExtensionContext,
   engine: AutoAcceptEngine | null,
   scheduler: Scheduler | null,
-  _eventBus: IEventBus,
-  _logger: Logger,
+  eventBus: IEventBus,
+  runtimeConfigService: RuntimeConfigService,
+  watchdog: TerminalWatchdog,
 ): void {
   const register = (id: string, handler: () => void | Promise<void>) => {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
@@ -353,10 +380,16 @@ function registerCommands(
   });
 
   register('domyh-auto-accept.openDashboard', () => {
-    DashboardPanel.createOrShow(context.extensionUri, _eventBus, {
-      stats: engine?.getStats(),
-      engineState: engine?.getState(),
-    });
+    DashboardPanel.createOrShow(
+      context.extensionUri,
+      eventBus,
+      {
+        stats: engine?.getStats(),
+        engineState: engine?.getState(),
+      },
+      runtimeConfigService,
+      watchdog,
+    );
   });
 
   // Queue commands — wired to Scheduler
@@ -388,6 +421,42 @@ function registerCommands(
     if (!scheduler) return;
     scheduler.stop();
     vscode.window.showInformationMessage('Prompt queue stopped ⏹️');
+  });
+
+  // ── Terminal watchdog runtime controls (Phase 4) ──
+  register('domyh-auto-accept.watchdog.pause', () => {
+    watchdog.pauseRuntime();
+    vscode.window.showWarningMessage('Terminal Watchdog: PAUSED ⏸️ (runtime only)');
+  });
+
+  register('domyh-auto-accept.watchdog.resume', () => {
+    watchdog.resumeRuntime();
+    vscode.window.showInformationMessage('Terminal Watchdog: RESUMED ▶️');
+  });
+
+  // ── Runtime config toggle commands (Phase 3: instant toggle) ──
+  register('domyh-auto-accept.toggleClickRun', () => {
+    const current = runtimeConfigService.get();
+    runtimeConfigService.update({ clickRun: !current.clickRun });
+    vscode.window.showInformationMessage(
+      `Auto-click "Run": ${!current.clickRun ? 'ON ✅' : 'OFF ❌'}`,
+    );
+  });
+
+  register('domyh-auto-accept.toggleClickProceed', () => {
+    const current = runtimeConfigService.get();
+    runtimeConfigService.update({ clickProceed: !current.clickProceed });
+    vscode.window.showInformationMessage(
+      `Auto-click "Proceed": ${!current.clickProceed ? 'ON ✅' : 'OFF ❌'}`,
+    );
+  });
+
+  register('domyh-auto-accept.toggleClickAcceptAll', () => {
+    const current = runtimeConfigService.get();
+    runtimeConfigService.update({ clickAcceptAll: !current.clickAcceptAll });
+    vscode.window.showInformationMessage(
+      `Auto-click "Accept All": ${!current.clickAcceptAll ? 'ON ✅' : 'OFF ❌'}`,
+    );
   });
 }
 

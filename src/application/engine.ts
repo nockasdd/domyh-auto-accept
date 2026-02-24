@@ -25,6 +25,8 @@ import { DeathLoopGuard } from './death-loop-guard';
 import { SmartFocus } from './smart-focus';
 import { PayloadManager } from '../infrastructure/cdp/payload-manager';
 import { IDEDetector } from '../infrastructure/detection/ide-detector';
+import { RuntimeConfigService } from './runtime-config-service';
+import { TerminalWatchdog } from '../infrastructure/terminal/watchdog';
 
 export class AutoAcceptEngine {
   private state = EngineState.Idle;
@@ -47,8 +49,13 @@ export class AutoAcceptEngine {
   private pollCount = 0;
   /** Re-entrancy guard: prevent concurrent pollTick execution */
   private pollRunning = false;
+  /** Rate-limit diagnostic log for UI "Running command" mismatch signal */
+  private lastUiRunningLogAt = 0;
   /** Startup grace: skip first N polls to let UI settle after toggle-ON */
   private startupGracePollsRemaining = 0;
+  /** Track UI "Running command" mismatch state for watchdog recovery */
+  private consecutiveUIRunningCommandCount = 0;
+  private static readonly UI_MISMATCH_THRESHOLD = 5; // Trigger recovery after 5 consecutive polls
   private static readonly FAST_POLL_MS = 800;
   private static readonly SLOW_POLL_MS = 2000;
   private static readonly NOOP_THRESHOLD = 10;
@@ -66,6 +73,8 @@ export class AutoAcceptEngine {
     private readonly payloads: PayloadManager,
     private readonly config: ConfigReader,
     private readonly logger: Logger,
+    private readonly runtimeConfigService?: RuntimeConfigService,
+    private readonly watchdog?: TerminalWatchdog,
   ) {
     // Listen for CDP state changes
     this.disposables.add(
@@ -136,6 +145,10 @@ export class AutoAcceptEngine {
       await this.cdp.connect(port, (t) => this.adapter.filterTargets(t));
       this.setState(EngineState.Connected);
       this.logger.info(`CDP connected on port ${port}`);
+
+      // Push the latest runtime config to all targets as early as possible
+      // so that auto-accept.js reads correct values on first injection.
+      await this.pushRuntimeConfigToAllTargets();
 
       // Inject probe to verify connection
       if (this.payloads.has('probe')) {
@@ -293,6 +306,14 @@ export class AutoAcceptEngine {
       await this.config.set('enabled', true);
       return true;
     }
+  }
+
+  /**
+   * Public entrypoint for pushing the latest runtime config to all CDP targets.
+   * This is used by extension.ts when VS Code configuration changes.
+   */
+  async pushRuntimeConfig(): Promise<void> {
+    await this.pushRuntimeConfigToAllTargets();
   }
 
   dispose(): void {
@@ -568,6 +589,83 @@ export class AutoAcceptEngine {
     }
   }
 
+  /**
+   * Build a small JavaScript snippet that merges the latest
+   * AutoAcceptRuntimeConfig into window.__autoAcceptConfig on the target side.
+   */
+  private buildRuntimeConfigScript(): string {
+    // Prefer RuntimeConfigService if available (for instant toggle support),
+    // otherwise fall back to ConfigReader (for VS Code settings-based config).
+    const runtimeConfig = this.runtimeConfigService
+      ? this.runtimeConfigService.get()
+      : this.config.getAutoAcceptRuntimeConfig();
+    // Serialize as JSON literal. This object contains only simple values/arrays.
+    const json = JSON.stringify(runtimeConfig);
+
+    // The script runs inside the target window. It safely merges fields so that
+    // future extensions can add new keys without breaking older payloads.
+    const script =
+      '(function(){' +
+      'try{' +
+      'var cfg=' + json + ';' +
+      'if(typeof window!==\"undefined\"){' +
+      'if(window.__autoAcceptConfig&&typeof window.__autoAcceptConfig===\"object\"){' +
+      'for(var k in cfg){if(Object.prototype.hasOwnProperty.call(cfg,k)){window.__autoAcceptConfig[k]=cfg[k];}}' +
+      '}else{' +
+      'window.__autoAcceptConfig=cfg;' +
+      '}' +
+      '}' +
+      '}catch(e){}' +
+      '})();';
+
+    return script;
+  }
+
+  /**
+   * Push the current runtime config to all connected CDP targets AND iframe contexts.
+   * This is safe to call even when CDP is disconnected.
+   * 
+   * CRITICAL: Must push to both main targets AND iframe contexts because:
+   * - Antigravity chat panels are in iframes
+   * - Config must be available in all execution contexts where payload runs
+   */
+  private async pushRuntimeConfigToAllTargets(): Promise<void> {
+    if (this.cdp.state !== ConnectionState.Connected) {
+      this.logger.debug('[RuntimeConfig] CDP not connected — skipping config push');
+      return;
+    }
+
+    try {
+      const script = this.buildRuntimeConfigScript();
+      
+      // Phase 1: Push to main targets (pages + webviews)
+      await this.cdp.evaluateAll(script, 3_000);
+      
+      // Phase 2: Push to iframe execution contexts
+      // This is critical for Antigravity where chat panels are in iframes
+      const iframePatterns = this.adapter.getIframePatterns?.() ?? [];
+      const iframeContexts = this.cdp.getIframeContexts(iframePatterns.length > 0 ? iframePatterns : undefined);
+      
+      if (iframeContexts.length > 0) {
+        this.logger.debug(`[RuntimeConfig] Pushing config to ${iframeContexts.length} iframe context(s)`);
+        for (const ctx of iframeContexts) {
+          try {
+            await this.cdp.evaluateInContext(script, ctx.contextId, 3_000);
+          } catch (iframeErr) {
+            // Iframe context may have been destroyed — skip silently
+            this.logger.debug(`[RuntimeConfig] Failed to push to iframe ${ctx.contextId}: ${iframeErr}`);
+          }
+        }
+      }
+      
+      this.logger.debug('[RuntimeConfig] Pushed runtime config to all targets and iframe contexts');
+    } catch (err) {
+      this.logger.debug(
+        `[RuntimeConfig] Failed to push config: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   /** Execute a specific set of commands in parallel */
   private async executeCommandSet(commands: string[]): Promise<void> {
     // Log on first poll and then every 50 polls for debugging
@@ -609,17 +707,41 @@ export class AutoAcceptEngine {
       let totalBlocked = 0;
       let totalMatches = 0;
       let clickedType: string | null = null;
+      let hasUIRunningCommand = false;
 
       const allResults = await this.cdp.evaluateAll(payload, 3000);
       for (const result of allResults) {
         if (result.success && result.value) {
           try {
             const data = typeof result.value === 'string' ? JSON.parse(result.value) : result.value;
-            const clickData = data as { clicks?: number; blocked?: number; total?: number; clickedType?: string };
+            const clickData = data as {
+              clicks?: number;
+              blocked?: number;
+              total?: number;
+              clickedType?: string;
+              uiRunningCommand?: boolean;
+              uiRunningCommandCount?: number;
+            };
             totalClicks += clickData.clicks ?? 0;
             totalBlocked += clickData.blocked ?? 0;
             totalMatches += clickData.total ?? 0;
             if (clickData.clickedType && !clickedType) clickedType = clickData.clickedType;
+
+            if (clickData.uiRunningCommand) {
+              hasUIRunningCommand = true;
+              const now = Date.now();
+              this.consecutiveUIRunningCommandCount++;
+              if (now - this.lastUiRunningLogAt > 10_000) {
+                this.lastUiRunningLogAt = now;
+                this.logger.warn(
+                  `[CDP] UI shows "Running command" card (${clickData.uiRunningCommandCount ?? 1}, consecutive: ${this.consecutiveUIRunningCommandCount}) while terminal shell events may be missing/ended`,
+                );
+              }
+              // Trigger watchdog recovery if threshold exceeded
+              if (this.consecutiveUIRunningCommandCount >= AutoAcceptEngine.UI_MISMATCH_THRESHOLD) {
+                this.triggerUIMismatchRecovery();
+              }
+            }
 
             // Log Cursor dialog handling (usage limit, submit-previous, etc.)
             if (data.dialogAction) {
@@ -652,15 +774,45 @@ export class AutoAcceptEngine {
       if (totalClicks === 0 || iframeContexts.length > 0) {
         for (const ctx of iframeContexts) {
           try {
+            // CRITICAL: Push runtime config to iframe context BEFORE injecting payload
+            // This ensures config is available when payload script runs
+            const configScript = this.buildRuntimeConfigScript();
+            await this.cdp.evaluateInContext(configScript, ctx.contextId, 2000).catch(() => {
+              // Ignore errors — config may already be set
+            });
+            
             this.logger.debug(`[CDP] Injecting payload into iframe context: ${ctx.name || ctx.contextId}`);
             const iframeResult = await this.cdp.evaluateInContext(payload, ctx.contextId, 3000);
             if (iframeResult.success && iframeResult.value) {
               const data = typeof iframeResult.value === 'string' ? JSON.parse(iframeResult.value) : iframeResult.value;
-              const clickData = data as { clicks: number; blocked: number; total: number; clickedType?: string };
+              const clickData = data as {
+                clicks: number;
+                blocked: number;
+                total: number;
+                clickedType?: string;
+                uiRunningCommand?: boolean;
+                uiRunningCommandCount?: number;
+              };
               totalClicks += clickData.clicks;
               totalBlocked += clickData.blocked;
               totalMatches += clickData.total;
               if (clickData.clickedType && !clickedType) clickedType = clickData.clickedType;
+
+              if (clickData.uiRunningCommand) {
+                hasUIRunningCommand = true;
+                const now = Date.now();
+                this.consecutiveUIRunningCommandCount++;
+                if (now - this.lastUiRunningLogAt > 10_000) {
+                  this.lastUiRunningLogAt = now;
+                  this.logger.warn(
+                    `[CDP] iframe UI shows "Running command" card (${clickData.uiRunningCommandCount ?? 1}, consecutive: ${this.consecutiveUIRunningCommandCount}) while terminal shell events may be missing/ended`,
+                  );
+                }
+                // Trigger watchdog recovery if threshold exceeded
+                if (this.consecutiveUIRunningCommandCount >= AutoAcceptEngine.UI_MISMATCH_THRESHOLD) {
+                  this.triggerUIMismatchRecovery();
+                }
+              }
 
               if (clickData.total > 0) {
                 const iframeLog = `[CDP:iframe:${ctx.name || ctx.contextId}] ${clickData.total} matches, ${clickData.clicks} clicked`;
@@ -679,6 +831,11 @@ export class AutoAcceptEngine {
             this.logger.debug(`[CDP:iframe:${ctx.contextId}] eval error: ${iframeErr}`);
           }
         }
+      }
+
+      // Reset UI mismatch counter if no "Running command" detected in this poll
+      if (!hasUIRunningCommand && this.consecutiveUIRunningCommandCount > 0) {
+        this.consecutiveUIRunningCommandCount = 0;
       }
 
       // Aggregate results (logging disabled for performance)
@@ -736,6 +893,27 @@ export class AutoAcceptEngine {
 
       return false;
     }
+  }
+
+  /**
+   * Trigger watchdog recovery when UI mismatch threshold is exceeded.
+   * Called when "Running command" card persists for N consecutive polls without shell events.
+   */
+  private triggerUIMismatchRecovery(): void {
+    if (!this.watchdog) {
+      this.logger.debug('[Engine] Watchdog not available — skipping UI mismatch recovery');
+      return;
+    }
+
+    this.logger.warn(
+      `[Engine] UI mismatch threshold exceeded (${this.consecutiveUIRunningCommandCount} consecutive polls) — triggering watchdog recovery`,
+    );
+
+    // Reset counter to prevent immediate re-trigger
+    this.consecutiveUIRunningCommandCount = 0;
+
+    // Trigger watchdog recovery (will reload all terminals or specific terminal if provided)
+    this.watchdog.triggerUIMismatchRecovery();
   }
 
   private handleCDPStateChange(newState: ConnectionState): void {

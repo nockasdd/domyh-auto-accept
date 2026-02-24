@@ -3,6 +3,8 @@
  */
 
 import { QueueMode } from '../enums';
+import { WatchdogConfig } from './terminal';
+import { AutoAcceptRuntimeConfig } from './auto-accept-config';
 
 /** Top-level extension configuration */
 export interface ExtensionConfig {
@@ -15,6 +17,12 @@ export interface ExtensionConfig {
   readonly debugMode: boolean;
   readonly autoRetry: AutoRetryConfig;
   readonly schedule: ScheduleConfig;
+  readonly terminalWatchdog: WatchdogConfig;
+  /**
+   * Runtime configuration snapshot used by the auto-accept payload.
+   * This is derived from other config values plus a few dedicated flags.
+   */
+  readonly autoAcceptRuntime: AutoAcceptRuntimeConfig;
 }
 
 /** Auto-retry configuration */

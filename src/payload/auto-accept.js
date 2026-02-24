@@ -15,8 +15,77 @@
  */
 'use strict';
 
-// Config: payload accepts dynamic config via __config
-// __config.bannedCommands: array of regex patterns to block commands
+// Runtime configuration support
+// The extension side is expected to set `window.__autoAcceptConfig`
+// to a plain JSON object matching AutoAcceptRuntimeConfig. This payload
+// keeps a safe default and merges any provided values at runtime.
+
+var DEFAULT_RUNTIME_CONFIG = {
+  enabled: true,
+  clickRun: true,
+  clickProceed: true,
+  clickAcceptAll: true,
+  clickAllowOnce: true,
+  clickAllowConversation: true,
+  clickSend: true,
+  bannedCommands: [],
+  dangerousCommands: [],
+  forbiddenZonesExtra: [],
+  pollFrequencyMs: 800,
+  proceedThrottleMs: 4000,
+  userScrollCooldownMs: 3000,
+  maxClicksPerCycle: 20,
+  logLevel: 'none',
+};
+
+function getRuntimeConfig() {
+  var cfg = DEFAULT_RUNTIME_CONFIG;
+  try {
+    if (typeof window !== 'undefined' && window.__autoAcceptConfig) {
+      var external = window.__autoAcceptConfig;
+      // Shallow merge — keys not provided by extension fall back to defaults
+      cfg = {
+        enabled: typeof external.enabled === 'boolean' ? external.enabled : DEFAULT_RUNTIME_CONFIG.enabled,
+        clickRun: typeof external.clickRun === 'boolean' ? external.clickRun : DEFAULT_RUNTIME_CONFIG.clickRun,
+        clickProceed: typeof external.clickProceed === 'boolean' ? external.clickProceed : DEFAULT_RUNTIME_CONFIG.clickProceed,
+        clickAcceptAll: typeof external.clickAcceptAll === 'boolean' ? external.clickAcceptAll : DEFAULT_RUNTIME_CONFIG.clickAcceptAll,
+        clickAllowOnce: typeof external.clickAllowOnce === 'boolean' ? external.clickAllowOnce : DEFAULT_RUNTIME_CONFIG.clickAllowOnce,
+        clickAllowConversation: typeof external.clickAllowConversation === 'boolean'
+          ? external.clickAllowConversation
+          : DEFAULT_RUNTIME_CONFIG.clickAllowConversation,
+        clickSend: typeof external.clickSend === 'boolean' ? external.clickSend : DEFAULT_RUNTIME_CONFIG.clickSend,
+        bannedCommands: Array.isArray(external.bannedCommands) ? external.bannedCommands.slice() : DEFAULT_RUNTIME_CONFIG.bannedCommands,
+        dangerousCommands: Array.isArray(external.dangerousCommands) ? external.dangerousCommands.slice() : DEFAULT_RUNTIME_CONFIG.dangerousCommands,
+        forbiddenZonesExtra: Array.isArray(external.forbiddenZonesExtra)
+          ? external.forbiddenZonesExtra.slice()
+          : DEFAULT_RUNTIME_CONFIG.forbiddenZonesExtra,
+        pollFrequencyMs:
+          typeof external.pollFrequencyMs === 'number' && external.pollFrequencyMs > 0
+            ? external.pollFrequencyMs
+            : DEFAULT_RUNTIME_CONFIG.pollFrequencyMs,
+        proceedThrottleMs:
+          typeof external.proceedThrottleMs === 'number' && external.proceedThrottleMs > 0
+            ? external.proceedThrottleMs
+            : DEFAULT_RUNTIME_CONFIG.proceedThrottleMs,
+        userScrollCooldownMs:
+          typeof external.userScrollCooldownMs === 'number' && external.userScrollCooldownMs > 0
+            ? external.userScrollCooldownMs
+            : DEFAULT_RUNTIME_CONFIG.userScrollCooldownMs,
+        maxClicksPerCycle:
+          typeof external.maxClicksPerCycle === 'number' && external.maxClicksPerCycle > 0
+            ? external.maxClicksPerCycle
+            : DEFAULT_RUNTIME_CONFIG.maxClicksPerCycle,
+        logLevel: external.logLevel === 'debug' || external.logLevel === 'info' || external.logLevel === 'none'
+          ? external.logLevel
+          : DEFAULT_RUNTIME_CONFIG.logLevel,
+      };
+    }
+  } catch (e) {
+    // In case anything goes wrong, fall back to defaults
+    cfg = DEFAULT_RUNTIME_CONFIG;
+  }
+  return cfg;
+}
 
 // ── Constants ────────────────────────────────────
 
@@ -79,7 +148,8 @@ if (typeof window !== 'undefined') {
 // ── User Scroll Detection ─────────────────────────
 // Track when user is actively scrolling to prevent auto-clicking buttons
 // This prevents interrupting users who are reading previous chat messages
-var USER_SCROLL_COOLDOWN_MS = 3000; // 3 seconds after last scroll action (increased for better UX)
+// NOTE: Cooldown is read from runtime config on every event, this value is only a fallback.
+var USER_SCROLL_COOLDOWN_MS = DEFAULT_RUNTIME_CONFIG.userScrollCooldownMs; // default 3s, override via runtime config
 var PROGRAMMATIC_SCROLL_MARKER_MS = 1000; // Increased to 1000ms to account for scroll animations and delays
 var SCROLLBAR_DETECTION_WIDTH = 30; // Width of scrollbar detection area (pixels)
 var SCROLL_POSITION_THRESHOLD = 3; // Minimum scroll change to detect drag (pixels)
@@ -87,7 +157,8 @@ var SCROLL_DEBOUNCE_MS = 100; // Debounce time for scroll events to avoid false 
 
 // Throttle for sensitive actions (e.g., Proceed) so they are not double-clicked
 // across multiple polling cycles while the UI is still visible.
-var PROCEED_THROTTLE_MS = 4000; // 4s is enough for Antigravity to transition the view
+// NOTE: Actual throttle is read from runtime config in shouldSkipProceedClick().
+var PROCEED_THROTTLE_MS = DEFAULT_RUNTIME_CONFIG.proceedThrottleMs; // default 4s, override via runtime config
 
 if (typeof window !== 'undefined') {
   window.__autoAcceptClickState = window.__autoAcceptClickState || {
@@ -100,7 +171,11 @@ function shouldSkipProceedClick() {
     if (typeof window === 'undefined') return false;
     var state = window.__autoAcceptClickState || (window.__autoAcceptClickState = { lastProceedClick: 0 });
     var now = Date.now();
-    if (now - state.lastProceedClick < PROCEED_THROTTLE_MS) {
+    var cfg = getRuntimeConfig();
+    var throttleMs = (cfg && typeof cfg.proceedThrottleMs === 'number' && cfg.proceedThrottleMs > 0)
+      ? cfg.proceedThrottleMs
+      : PROCEED_THROTTLE_MS;
+    if (now - state.lastProceedClick < throttleMs) {
       return true; // Recently clicked Proceed — skip this attempt
     }
     state.lastProceedClick = now;
@@ -229,9 +304,13 @@ if (typeof window !== 'undefined') {
       if (state.scrollTimeout) clearTimeout(state.scrollTimeout);
       // Clear debounce timeout
       if (state.scrollDebounceTimeout) clearTimeout(state.scrollDebounceTimeout);
+      var cfg = getRuntimeConfig();
+      var cooldownMs = (cfg && typeof cfg.userScrollCooldownMs === 'number' && cfg.userScrollCooldownMs > 0)
+        ? cfg.userScrollCooldownMs
+        : USER_SCROLL_COOLDOWN_MS;
       state.scrollTimeout = setTimeout(function() {
         state.isScrolling = false;
-      }, USER_SCROLL_COOLDOWN_MS);
+      }, cooldownMs);
     };
     
     // Track mouse down - check if on scrollbar or if user is about to drag
@@ -1878,12 +1957,70 @@ function handleCursorDialogs() {
 
 // ── Main Execution ───────────────────────────────
 
+/**
+ * Detect "Running command" cards that may remain visible in UI while terminal
+ * shell events are missing or already ended. This is diagnostic-only here;
+ * recovery is handled by extension-side watchdog logic.
+ */
+function detectRunningCommandCards(doc) {
+  var info = { detected: false, count: 0 };
+  if (!doc) return info;
+
+  try {
+    var nodes = doc.querySelectorAll('div, span');
+    var limit = Math.min(nodes.length, 600);
+    for (var i = 0; i < limit; i++) {
+      var n = nodes[i];
+      var t = (n.textContent || '').trim().toLowerCase();
+      if (t !== 'running command') continue;
+
+      // Find a nearby container that also has a "Cancel" button/text.
+      var anc = n;
+      var hasCancel = false;
+      for (var d = 0; d < 8 && anc; d++) {
+        try {
+          var btns = anc.querySelectorAll('button, [role="button"], span, div');
+          var bLimit = Math.min(btns.length, 80);
+          for (var b = 0; b < bLimit; b++) {
+            var bt = (btns[b].textContent || '').trim().toLowerCase();
+            if (bt === 'cancel') {
+              hasCancel = true;
+              break;
+            }
+          }
+        } catch (e) { /* ignore */ }
+        if (hasCancel) break;
+        anc = anc.parentElement;
+      }
+
+      if (hasCancel) {
+        info.detected = true;
+        info.count += 1;
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  return info;
+}
+
 function findAndClickAcceptButtons() {
+  var runtimeConfig = getRuntimeConfig();
+  // Global runtime gate — allow extension to disable payload without removing it.
+  if (!runtimeConfig.enabled) {
+    return {
+      clicked: [],
+      blocked: 0,
+      scanMode: 'disabled',
+      scrollClicked: false,
+    };
+  }
+
   var clickedButtons = [];
   var blockedCount = 0;
   var scanMode = 'none';
   var scrolledInMainChat = false;
   var checkedElements = new Set(); // Shared across all branches to avoid duplicate clicks
+  var runningCommandInfo = detectRunningCommandCards(typeof document !== 'undefined' ? document : null);
 
   // ── Branch 0.5: Antigravity chat panel in MAIN document (no iframe) ──
   // New Antigravity versions render the agent chat panel directly in the main
@@ -1919,6 +2056,8 @@ function findAndClickAcceptButtons() {
             var mBtn = mainChatButtons[mcb];
             var mText = getButtonText(mBtn);
             if (!mText) continue;
+            // Respect runtime config for Proceed auto-clicks
+            if (mText === 'proceed' && !runtimeConfig.clickProceed) continue;
             // Mark as checked so later branches (editor-diff, iframe, etc.)
             // do NOT click the same Proceed/Accept button again.
             checkedElements.add(mBtn);
@@ -2031,6 +2170,8 @@ function findAndClickAcceptButtons() {
         var cBtn = buttons[i];
         var cText = getButtonText(cBtn);
         if (!cText) continue;
+        // Respect runtime config for Proceed auto-clicks
+        if (cText === 'proceed' && !runtimeConfig.clickProceed) continue;
         // Throttle Proceed so it is not double-clicked across polling cycles
         if (cText === 'proceed' && shouldSkipProceedClick()) continue;
         try {
@@ -2063,6 +2204,10 @@ function findAndClickAcceptButtons() {
         if (!text) continue;
 
         if (isAcceptButton(text) && isElementClickable(btn)) {
+          // Respect runtime config for Proceed / Run / Accept All auto-clicks
+          if (text === 'proceed' && !runtimeConfig.clickProceed) continue;
+          if (text === 'run' && !runtimeConfig.clickRun) continue;
+          if (text === 'accept all' && !runtimeConfig.clickAcceptAll) continue;
           // Throttle Proceed so it is not double-clicked across polling cycles
           if (text === 'proceed' && shouldSkipProceedClick()) continue;
           // Safety gate: check dangerous commands for "run" buttons
@@ -2092,7 +2237,7 @@ function findAndClickAcceptButtons() {
   var iframeResult = scanIframeDocuments();
   var iframeButtons = iframeResult.buttons;
   blockedCount += iframeResult.blocked;
-  if (iframeButtons.length > 0) {
+      if (iframeButtons.length > 0) {
     scanMode = scanMode === 'none' ? 'iframe-traverse' : scanMode + '+iframe';
     for (var ib = 0; ib < iframeButtons.length; ib++) {
       try {
@@ -2478,7 +2623,9 @@ function findAndClickAcceptButtons() {
     clicked: clickedButtons,
     blocked: blockedCount,
     scanMode: scanMode,
-    scrollClicked: scrolledInIframe || scrolledInMainChat
+    scrollClicked: scrolledInIframe || scrolledInMainChat,
+    uiRunningCommand: runningCommandInfo.detected,
+    uiRunningCommandCount: runningCommandInfo.count
   };
   
   // Add iframe diagnostics if available
