@@ -22,6 +22,11 @@ export interface WatchdogConfig {
   readonly maxRetries: number;
   /** Recovery strategy */
   readonly recoveryStrategy: 'enter-only' | 'escalating' | 'kill-only';
+  /**
+   * Soft mode: when true, the watchdog will never kill terminals.
+   * Recovery is limited to Enter/Ctrl+C even if recoveryStrategy is "escalating" or "kill-only".
+   */
+  readonly softMode: boolean;
   /** Commands that should never be monitored (long-running by design) */
   readonly excludePatterns: string[];
   /**
@@ -49,6 +54,10 @@ export interface CmdTracker {
    * Without this, interacted terminals can be skipped forever and never recover.
    */
   skippedDueToInteraction: boolean;
+  /** Optional exit code reported by the shell execution (undefined if unknown/interrupted) */
+  exitCode?: number;
+  /** Timestamp (ms since epoch) when the command finished, if known */
+  endTime?: number;
 }
 
 /** High-level watchdog status for UI (status bar / dashboard) */

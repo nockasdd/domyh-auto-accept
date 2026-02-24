@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { CmdTracker, WatchdogConfig, TrackingState } from '../../domain/types/terminal';
+import { CmdTracker, WatchdogConfig } from '../../domain/types/terminal';
 import { Logger } from '../../core/logger';
+import { IEventBus } from '../../domain/interfaces/event-bus';
 
 /**
  * TerminalWatchdog
@@ -30,12 +31,27 @@ export class TerminalWatchdog implements vscode.Disposable {
     /^\s*cd(\s+.+)?\s*$/i,
     /^\s*chdir(\s+.+)?\s*$/i,
     /^\s*(pwd|ls|dir|cls|clear)\s*$/i,
+    // Common instant, non-long-running shell commands
+    /^\s*echo(\s+.+)?\s*$/i,
+    /^\s*export(\s+.+)?\s*$/i,
+    /^\s*set(\s+.+)?\s*$/i,
+    /^\s*alias(\s+.+)?\s*$/i,
+  ];
+
+  private static readonly QUICK_LONG_RUNNING_PATTERNS: RegExp[] = [
+    /\bnuxt\s+build\b/i,
+    /\bnext\s+build\b/i,
+    /\breact-scripts\s+build\b/i,
+    /\bnpm\s+run\s+build\b/i,
+    /\byarn\s+build\b/i,
+    /\bpnpm\s+build\b/i,
   ];
 
   constructor(
     private readonly config: WatchdogConfig,
     private readonly logger: Logger,
-  ) {}
+    private readonly eventBus?: IEventBus,
+  ) { }
 
   start(): void {
     if (!this.config.enabled) {
@@ -114,20 +130,24 @@ export class TerminalWatchdog implements vscode.Disposable {
       return;
     }
 
-    if (terminal) {
-      // Reload specific terminal
-      this.logger.warn(`[Watchdog] UI mismatch recovery triggered for terminal: ${terminal.name || 'unnamed'}`);
-      this.reloadTerminal(terminal);
+    if (!terminal) {
+      // Safety: do not ever reload all terminals from a generic trigger.
+      this.logger.debug('[Watchdog] UI mismatch recovery called without terminal — ignoring to avoid reloading healthy terminals');
+      return;
+    }
+
+    // Prefer a gentle Ctrl+C over hard reload to avoid losing CWD/env.
+    this.logger.warn(
+      `[Watchdog] UI mismatch recovery triggered for terminal: ${terminal.name || 'unnamed'} — sending Ctrl+C instead of reload`,
+    );
+    const tracker = this.trackers.get(terminal);
+    if (tracker) {
+      void this.sendCtrlC(terminal, tracker);
     } else {
-      // Reload all tracked terminals
-      const terminals = Array.from(this.trackers.keys());
-      if (terminals.length === 0) {
-        this.logger.debug('[Watchdog] UI mismatch recovery triggered but no terminals tracked');
-        return;
-      }
-      this.logger.warn(`[Watchdog] UI mismatch recovery triggered for ${terminals.length} terminal(s)`);
-      for (const term of terminals) {
-        this.reloadTerminal(term);
+      try {
+        terminal.sendText('\x03', false);
+      } catch (err) {
+        this.logger.error('[Watchdog] Failed to send Ctrl+C for UI mismatch recovery', err);
       }
     }
   }
@@ -154,6 +174,16 @@ export class TerminalWatchdog implements vscode.Disposable {
       return;
     }
 
+    const existing = this.trackers.get(e.terminal);
+    if (existing && (existing.state === 'running' || existing.state === 'recovering')) {
+      // Overlapping executions should not happen in a normal shell, but be defensive.
+      this.logger.warn(
+        `[Watchdog] Overlapping command detected — marking previous command as completed: "${existing.commandLine}"`,
+      );
+      existing.state = 'completed';
+      this.trackers.delete(e.terminal);
+    }
+
     const tracker: CmdTracker = {
       terminal: e.terminal,
       commandLine,
@@ -172,22 +202,32 @@ export class TerminalWatchdog implements vscode.Disposable {
     const tracker = this.trackers.get(e.terminal);
     if (!tracker) return;
 
-    const elapsedMs = Date.now() - tracker.startTime;
+    const now = Date.now();
+    const elapsedMs = now - tracker.startTime;
     const maybeExitCode = (e as unknown as { exitCode?: number }).exitCode;
+    const exitCode = typeof maybeExitCode === 'number' ? maybeExitCode : undefined;
 
-    if (elapsedMs < 2000 && this.isLikelyLongRunningCommand(tracker.commandLine)) {
+    // Quick-end heuristic: only suspect UI mismatch for known long-running commands that
+    // exited successfully but far quicker than expected.
+    if (
+      elapsedMs < this.config.uiMismatchQuickEndMs &&
+      this.isLikelyLongRunningCommand(tracker.commandLine) &&
+      exitCode === 0
+    ) {
       this.logger.warn(
         `[Watchdog] Command ended unusually fast (${elapsedMs}ms): "${tracker.commandLine}"` +
-          (typeof maybeExitCode === 'number' ? ` (exitCode=${maybeExitCode})` : ''),
+        (exitCode !== undefined ? ` (exitCode=${exitCode})` : ''),
       );
       this.scheduleUiMismatchRecovery(e.terminal, tracker, elapsedMs);
     }
 
+    tracker.exitCode = exitCode;
+    tracker.endTime = now;
     tracker.state = 'completed';
     this.trackers.delete(e.terminal);
     this.logger.debug(
       `[Watchdog] Command ended: ${tracker.commandLine} (${elapsedMs}ms)` +
-        (typeof maybeExitCode === 'number' ? ` exitCode=${maybeExitCode}` : ''),
+      (typeof maybeExitCode === 'number' ? ` exitCode=${maybeExitCode}` : ''),
     );
   }
 
@@ -207,18 +247,15 @@ export class TerminalWatchdog implements vscode.Disposable {
           continue; // Still in recovery wait period
         }
         // Recovery wait expired — check if still stuck
-        if (recoveryElapsed >= TerminalWatchdog.RECOVERY_WAIT_MS) {
-          // Command is still stuck after recovery attempt
-          const totalElapsed = now - tracker.startTime;
-          const timeoutMs = this.getTimeoutMs(tracker.commandLine);
-          if (totalElapsed > timeoutMs) {
-            // Still stuck — continue recovery escalation
-            tracker.state = 'stuck';
-            void this.recover(terminal, tracker);
-          } else {
-            // Recovery may have worked — mark as running again to re-check
-            tracker.state = 'running';
-          }
+        const totalElapsed = now - tracker.startTime;
+        const timeoutMs = this.getTimeoutMs(tracker.commandLine);
+        if (totalElapsed > timeoutMs) {
+          // Still stuck — continue recovery escalation
+          tracker.state = 'stuck';
+          void this.recover(terminal, tracker);
+        } else {
+          // Recovery may have worked — mark as running again to re-check
+          tracker.state = 'running';
         }
         continue;
       }
@@ -227,18 +264,20 @@ export class TerminalWatchdog implements vscode.Disposable {
       const elapsed = now - tracker.startTime;
       const timeoutMs = this.getTimeoutMs(tracker.commandLine);
 
-      // Basic safety: if user has interacted with this terminal, be more cautious
-      if (
-        terminal.state.isInteractedWith &&
-        tracker.retryCount === 0 &&
-        !tracker.skippedDueToInteraction
-      ) {
-        // Skip first recovery attempt to avoid interfering with manual work
-        tracker.skippedDueToInteraction = true;
-        this.logger.debug(
-          `[Watchdog] Terminal interactedWith=true — skipping first recovery for "${tracker.commandLine}"`,
-        );
-        continue;
+      // Extend timeout by 2x when user is actively using terminal.
+      // This avoids sending Enter/Ctrl+C while user is typing, but doesn't skip forever.
+      if (terminal.state.isInteractedWith) {
+        const extendedTimeout = timeoutMs * 2;
+        if (elapsed <= extendedTimeout) {
+          if (!tracker.skippedDueToInteraction) {
+            tracker.skippedDueToInteraction = true;
+            this.logger.debug(
+              `[Watchdog] Terminal interactedWith=true — extending timeout to ${Math.round(extendedTimeout / 1000)}s for "${tracker.commandLine}"`,
+            );
+          }
+          continue;
+        }
+        // Past 2x timeout even with interaction — proceed with recovery
       }
 
       if (elapsed <= timeoutMs) continue;
@@ -248,6 +287,12 @@ export class TerminalWatchdog implements vscode.Disposable {
           elapsed / 1000,
         )}s (timeout: ${Math.round(timeoutMs / 1000)}s)`,
       );
+      this.eventBus?.emit('watchdog:activity', {
+        stage: 'stuck-detected',
+        terminalName: terminal.name || 'Terminal',
+        commandLine: tracker.commandLine,
+        elapsedMs: elapsed,
+      });
 
       tracker.state = 'stuck';
       void this.recover(terminal, tracker);
@@ -255,33 +300,19 @@ export class TerminalWatchdog implements vscode.Disposable {
   }
 
   private getTimeoutMs(commandLine: string): number {
-    const cmd = commandLine.toLowerCase();
-
-    // Heavy web builds (Nuxt / Next / React, etc.) can legitimately take many minutes.
-    // Treat these as "installTimeout" (highest) by default.
-    if (
-      cmd.includes('nuxt build') ||
-      cmd.includes('next build') ||
-      cmd.includes('react-scripts build') ||
-      cmd.includes('npm run build') ||
-      cmd.includes('yarn build') ||
-      cmd.includes('pnpm build')
-    ) {
-      return this.config.installTimeout * 1000;
+    const category = this.classifyCommand(commandLine);
+    switch (category) {
+      case 'heavy-build':
+      case 'install':
+        return this.config.installTimeout * 1000;
+      case 'test':
+      case 'build':
+        return this.config.longTimeout * 1000;
+      case 'ephemeral':
+      case 'default':
+      default:
+        return this.config.defaultTimeout * 1000;
     }
-
-    // Generic build/test commands get longTimeout (medium).
-    if (cmd.includes('test') || cmd.includes('build')) {
-      return this.config.longTimeout * 1000;
-    }
-
-    // Install / package restore commands are also long-running by nature.
-    if (cmd.includes('install') || cmd.includes('restore')) {
-      return this.config.installTimeout * 1000;
-    }
-
-    // Everything else: default timeout.
-    return this.config.defaultTimeout * 1000;
   }
 
   private isExcluded(commandLine: string): boolean {
@@ -303,17 +334,53 @@ export class TerminalWatchdog implements vscode.Disposable {
   }
 
   private isLikelyLongRunningCommand(commandLine: string): boolean {
-    const cmd = (commandLine || '').toLowerCase();
+    const category = this.classifyCommand(commandLine);
     return (
-      cmd.includes(' test') ||
-      cmd.startsWith('test ') ||
-      cmd.includes('go test') ||
-      cmd.includes(' build') ||
-      cmd.startsWith('build ') ||
-      cmd.includes('npm run build') ||
-      cmd.includes('yarn build') ||
-      cmd.includes('pnpm build')
+      category === 'test' ||
+      category === 'build' ||
+      category === 'heavy-build' ||
+      category === 'install'
     );
+  }
+
+  private classifyCommand(commandLine: string): 'ephemeral' | 'default' | 'build' | 'heavy-build' | 'install' | 'test' {
+    const raw = (commandLine || '').trim();
+    if (!raw) return 'default';
+    const lower = raw.toLowerCase();
+
+    // Ephemeral commands are short-lived and should never be treated as long-running.
+    for (const pattern of TerminalWatchdog.EPHEMERAL_COMMAND_PATTERNS) {
+      if (pattern.test(raw)) return 'ephemeral';
+    }
+
+    // Heavy web builds (Nuxt / Next / React, etc.) can legitimately take many minutes.
+    for (const pattern of TerminalWatchdog.QUICK_LONG_RUNNING_PATTERNS) {
+      if (pattern.test(lower)) return 'heavy-build';
+    }
+
+    // Tokenize to detect generic patterns more safely.
+    const tokens = lower.split(/\s+/);
+    const first = tokens[0] || '';
+    const second = tokens[1] || '';
+
+    // Install / restore commands are long-running by nature.
+    if (tokens.includes('install') || tokens.includes('restore')) {
+      return 'install';
+    }
+
+    // Explicit test commands (go test, npm test, yarn test, pnpm test, etc.).
+    if (
+      (first === 'go' && second === 'test') ||
+      ((first === 'npm' || first === 'yarn' || first === 'pnpm') && second === 'test')
+    ) {
+      return 'test';
+    }
+
+    // Generic "test"/"build" scripts: treat as long-running but one level below heavy builds.
+    if (tokens.includes('test')) return 'test';
+    if (tokens.includes('build')) return 'build';
+
+    return 'default';
   }
 
   private scheduleUiMismatchRecovery(
@@ -341,9 +408,10 @@ export class TerminalWatchdog implements vscode.Disposable {
       }
 
       this.logger.warn(
-        `[Watchdog] UI mismatch suspected after quick-end "${tracker.commandLine}" — reloading terminal`,
+        `[Watchdog] UI mismatch suspected after quick-end "${tracker.commandLine}" — sending Ctrl+C for gentle recovery`,
       );
-      this.reloadTerminal(terminal);
+      // Gentle recovery: send Ctrl+C once instead of killing/reloading the terminal.
+      void this.sendCtrlC(terminal, tracker);
     }, graceMs);
 
     this.pendingUiMismatchResets.set(terminal, timer);
@@ -357,27 +425,52 @@ export class TerminalWatchdog implements vscode.Disposable {
     }
   }
 
-  private reloadTerminal(terminal: vscode.Terminal): void {
-    try {
-      const name = terminal.name || 'Terminal';
-      terminal.dispose();
-      const fresh = vscode.window.createTerminal({ name });
-      fresh.show(true);
-    } catch (err) {
-      this.logger.error('[Watchdog] Failed to reload terminal', err);
-    }
-  }
+
 
   private async recover(
     terminal: vscode.Terminal,
     tracker: CmdTracker,
   ): Promise<void> {
+    // Soft mode: never kill terminals, only attempt gentle recovery.
+    if (this.config.softMode) {
+      if (tracker.retryCount === 0) {
+        await this.sendEnter(terminal, tracker);
+        return;
+      }
+      if (tracker.retryCount >= this.config.maxRetries) {
+        this.logger.warn(
+          `[Watchdog] softMode: max retries (${this.config.maxRetries}) reached for "${tracker.commandLine}" — stopping recovery`,
+        );
+        tracker.state = 'completed';
+        this.trackers.delete(terminal);
+        return;
+      }
+      // For soft mode we cap at Ctrl+C and do not escalate further.
+      await this.sendCtrlC(terminal, tracker);
+      return;
+    }
+
     if (this.config.recoveryStrategy === 'enter-only') {
+      if (tracker.retryCount >= this.config.maxRetries) {
+        this.logger.warn(
+          `[Watchdog] enter-only: max retries (${this.config.maxRetries}) reached for "${tracker.commandLine}" — stopping recovery`,
+        );
+        tracker.state = 'completed';
+        this.trackers.delete(terminal);
+        this.eventBus?.emit('watchdog:activity', {
+          stage: 'enter',
+          terminalName: terminal.name || 'Terminal',
+          commandLine: tracker.commandLine,
+          elapsedMs: Date.now() - tracker.startTime,
+        });
+        return;
+      }
       await this.sendEnter(terminal, tracker);
       return;
     }
 
     if (this.config.recoveryStrategy === 'kill-only') {
+      if (this.shouldAvoidKill(terminal, tracker)) return;
       this.killTerminal(terminal, tracker);
       return;
     }
@@ -387,6 +480,7 @@ export class TerminalWatchdog implements vscode.Disposable {
       this.logger.warn(
         `[Watchdog] Max retries reached for "${tracker.commandLine}" — killing terminal`,
       );
+      if (this.shouldAvoidKill(terminal, tracker)) return;
       this.killTerminal(terminal, tracker);
       return;
     }
@@ -402,6 +496,7 @@ export class TerminalWatchdog implements vscode.Disposable {
     }
 
     // 2+ retries → kill
+    if (this.shouldAvoidKill(terminal, tracker)) return;
     this.killTerminal(terminal, tracker);
   }
 
@@ -415,11 +510,14 @@ export class TerminalWatchdog implements vscode.Disposable {
       tracker.retryCount += 1;
       tracker.lastActivity = Date.now();
       tracker.state = 'recovering';
+      this.eventBus?.emit('watchdog:activity', {
+        stage: 'enter',
+        terminalName: terminal.name || 'Terminal',
+        commandLine: tracker.commandLine,
+      });
     } catch (err) {
       this.logger.error('[Watchdog] Failed to send Enter', err);
     }
-
-    setTimeout(() => this.maybeMarkStuck(tracker), TerminalWatchdog.RECOVERY_WAIT_MS);
   }
 
   private async sendCtrlC(
@@ -432,39 +530,65 @@ export class TerminalWatchdog implements vscode.Disposable {
       tracker.retryCount += 1;
       tracker.lastActivity = Date.now();
       tracker.state = 'recovering';
+      this.eventBus?.emit('watchdog:activity', {
+        stage: 'ctrlc',
+        terminalName: terminal.name || 'Terminal',
+        commandLine: tracker.commandLine,
+      });
     } catch (err) {
       this.logger.error('[Watchdog] Failed to send Ctrl+C', err);
     }
-
-    setTimeout(() => this.maybeMarkStuck(tracker), TerminalWatchdog.RECOVERY_WAIT_MS);
   }
 
-  private maybeMarkStuck(_tracker: CmdTracker): void {
-    // This is called after RECOVERY_WAIT_MS timeout.
-    // If still in 'recovering' state, it means recovery didn't work.
-    // checkAllTerminals() will handle the next recovery stage.
-    // We don't change state here — let checkAllTerminals() decide based on elapsed time.
-    // Parameter is kept for API compatibility but not used.
+  private shouldAvoidKill(terminal: vscode.Terminal, tracker: CmdTracker): boolean {
+    if (terminal.state.isInteractedWith) {
+      this.logger.warn(
+        `[Watchdog] Kill skipped for interacted terminal (user activity detected) — ` +
+        `command "${tracker.commandLine}" will be marked as completed instead.`,
+      );
+      tracker.state = 'completed';
+      this.trackers.delete(terminal);
+      return true;
+    }
+    return false;
   }
+
 
   private killTerminal(terminal: vscode.Terminal, tracker: CmdTracker): void {
     this.logger.warn(
       `[Watchdog] Recovery Stage 3: Killing terminal (command: "${tracker.commandLine}")`,
     );
+    this.logger.warn(
+      '[Watchdog] Hint: If this command is expected to run long, add a substring of it to "domyh-auto-accept.terminalWatchdog.excludePatterns".',
+    );
+
+    // Send Ctrl+C first for graceful shutdown (important for kill-only strategy
+    // where no previous Ctrl+C was sent, and for ConPTY on Windows).
     try {
-      terminal.dispose();
-    } catch (err) {
-      this.logger.error('[Watchdog] Failed to dispose terminal', err);
+      terminal.sendText('\x03', false);
+    } catch {
+      // Terminal may already be unresponsive
     }
 
     this.trackers.delete(terminal);
-    tracker.state = 'completed' as TrackingState;
+    tracker.state = 'completed';
+
+    // Grace period: allow Ctrl+C to take effect before hard kill.
+    const graceMs = 2000;
+    setTimeout(() => {
+      try {
+        terminal.dispose();
+      } catch {
+        // Terminal may already be closed by Ctrl+C
+      }
+    }, graceMs);
 
     void vscode.window
       .showWarningMessage(
         `Terminal watchdog: Command "${tracker.commandLine}" was stuck for ` +
-          `${Math.round((Date.now() - tracker.startTime) / 1000)}s. ` +
-          'Terminal was killed. You may need to re-run the command.',
+        `${Math.round((Date.now() - tracker.startTime) / 1000)}s. ` +
+        'Terminal was killed. You may need to re-run the command.\n\n' +
+        'Tip: If this command is intentionally long-running, add part of it to "domyh-auto-accept.terminalWatchdog.excludePatterns" in your settings to avoid future kills.',
         'Open New Terminal',
         'Dismiss',
       )
@@ -478,6 +602,12 @@ export class TerminalWatchdog implements vscode.Disposable {
           // ignore UI errors
         },
       );
+
+    this.eventBus?.emit('watchdog:activity', {
+      stage: 'kill',
+      terminalName: terminal.name || 'Terminal',
+      commandLine: tracker.commandLine,
+    });
   }
 }
 

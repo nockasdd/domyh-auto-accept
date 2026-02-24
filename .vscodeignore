@@ -10,3 +10,9 @@ esbuild.config.mjs
 **/*.map
 .domyh/**
 .agent/**
+scripts/**
+.github/**
+eslint.config.mjs
+vitest.config.ts
+*.vsix
+CHANGELOG.md

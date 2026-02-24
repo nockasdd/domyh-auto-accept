@@ -613,6 +613,22 @@ function getButtonText(el) {
     // Try aria-label first (most reliable for VS Code buttons)
     text = el.getAttribute('aria-label') || '';
     if (!text) {
+      // CRITICAL: Prefer DIRECT text nodes of the element (e.g. <button>Allow<span>Alt+⏎</span></button>)
+      // This avoids mis-reading the shortcut span ("Alt+⏎") as the button label.
+      try {
+        var directTextParts = [];
+        for (var dn = 0; dn < (el.childNodes ? el.childNodes.length : 0); dn++) {
+          var node = el.childNodes[dn];
+          if (node && node.nodeType === 3) { // TEXT_NODE
+            var t = (node.textContent || '').trim();
+            if (t) directTextParts.push(t);
+          }
+        }
+        if (directTextParts.length > 0) {
+          text = directTextParts.join(' ');
+        }
+      } catch (e) { /* ignore */ }
+
       // For buttons with multiple spans (label + shortcut), get first span only
       var spans = el.querySelectorAll(':scope > span');
       if (spans.length > 1) {
@@ -1793,17 +1809,48 @@ function handleCursorDialogs() {
       var closeBtn = popup.querySelector('.composer-warning-popup-close-button');
       if (closeBtn) closeBtn.click();
 
-      // CRITICAL: Focus into chat editor to show the Send button
-      // The Send button only appears when the editor is focused/active
-      var input = document.querySelector('.aislash-editor-input[contenteditable="true"], .aislash-editor-input-readonly[contenteditable="false"]');
-      if (!input) {
-        // Fallback: try to find any editor input
-        input = document.querySelector('.aislash-editor-input, [class*="editor-input"], [class*="chat-input"]');
+      // CRITICAL: Focus into the **current** chat editor to show the Send button
+      // The Send button only appears when the active editor is focused/visible.
+      // There may be multiple editors (old chats, side panels), so we:
+      // 1) Collect all candidate editors.
+      // 2) Pick the last *visible* one on screen (usually the newest composer).
+      function isVisibleInput(el) {
+        if (!el) return false;
+        if (!el.getBoundingClientRect) return !!el.offsetParent;
+        var rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+        if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) {
+          return false;
+        }
+        return true;
       }
-      
+
+      var input = null;
+
+      // Primary: explicit Cursor chat editors (editable + readonly)
+      var primaryInputs = document.querySelectorAll('.aislash-editor-input[contenteditable="true"], .aislash-editor-input-readonly[contenteditable="false"]');
+      for (var pi = primaryInputs.length - 1; pi >= 0; pi--) {
+        if (isVisibleInput(primaryInputs[pi])) {
+          input = primaryInputs[pi];
+          break;
+        }
+      }
+
+      // Fallback: any editor-looking input if none of the primary ones are visible
+      if (!input) {
+        var fallbackInputs = document.querySelectorAll('.aislash-editor-input, [class*="editor-input"], [class*="chat-input"]');
+        for (var fi = fallbackInputs.length - 1; fi >= 0; fi--) {
+          if (isVisibleInput(fallbackInputs[fi])) {
+            input = fallbackInputs[fi];
+            break;
+          }
+        }
+      }
+
       if (!input) return { action: 'usage-limit-no-input' };
-      
-      // Verify chat input has content
+
+      // Verify the selected chat input has content to resend
       if (!(input.textContent || '').trim()) return { action: 'usage-limit-empty-input' };
 
       // CRITICAL: Focus the editor to trigger Send button visibility
@@ -1826,15 +1873,24 @@ function handleCursorDialogs() {
       } catch (e) { /* ignore focus errors */ }
 
       // Try to find Send button with multiple selectors
-      // The button appears after editor is focused
+      // Prefer a button that is in the same composer/container as the chosen input.
+      // The button appears after editor is focused.
       var sendBtn = null;
-      
-      // Try multiple selectors for Send button
-      sendBtn = document.querySelector('.send-with-mode .anysphere-icon-button, .anysphere-icon-button[data-mode="agent"], .send-with-mode button');
+      var inputRoot = null;
+
+      if (typeof input.closest === 'function') {
+        inputRoot = input.closest('.composer, [class*="composer"], [class*="chat"], [class*="conversation"]');
+      }
+      if (!inputRoot) {
+        inputRoot = document;
+      }
+
+      // Try multiple selectors for Send button, scoped to the inputRoot first
+      sendBtn = inputRoot.querySelector('.send-with-mode .anysphere-icon-button, .anysphere-icon-button[data-mode="agent"], .send-with-mode button');
       
       if (!sendBtn) {
         // Also try finding by icon class (arrow-up icon)
-        var allIconButtons = document.querySelectorAll('.anysphere-icon-button, button[class*="anysphere"]');
+        var allIconButtons = inputRoot.querySelectorAll('.anysphere-icon-button, button[class*="anysphere"]');
         for (var i = 0; i < allIconButtons.length; i++) {
           var btn = allIconButtons[i];
           var icon = btn.querySelector('.codicon-arrow-up-two, .codicon-arrow-up');
@@ -1853,6 +1909,40 @@ function handleCursorDialogs() {
         var sendContainer = document.querySelector('.send-with-mode');
         if (sendContainer) {
           sendBtn = sendContainer.querySelector('button, .anysphere-icon-button, [role="button"]');
+        }
+      }
+
+      // Final, conservative fallback: search more broadly for a "Send"/"Ask" button
+      // in the main document after the editor has been focused.
+      if (!sendBtn) {
+        var candidates = document.querySelectorAll('[data-click-ready="true"], button, .anysphere-icon-button, [role="button"]');
+        for (var cb2 = 0; cb2 < candidates.length; cb2++) {
+          var c2 = candidates[cb2];
+          var combined2 = (
+            (c2.getAttribute && c2.getAttribute('aria-label')) || ''
+          ) + ' ' + (c2.textContent || '');
+          var label2 = combined2.toLowerCase();
+          if (label2.indexOf('send') !== -1 || label2.indexOf('ask') !== -1) {
+            sendBtn = c2;
+            break;
+          }
+        }
+      }
+
+      // Final, conservative fallback: look for a nearby "Send"/"Ask" style button
+      // within the same composer container, but ONLY after the popup is closed.
+      if (!sendBtn && inputRoot && inputRoot !== document) {
+        var candidateButtons = inputRoot.querySelectorAll('[data-click-ready="true"], button, .anysphere-icon-button, [role="button"]');
+        for (var cb = 0; cb < candidateButtons.length; cb++) {
+          var cbtn = candidateButtons[cb];
+          var combinedLabel = (
+            (cbtn.getAttribute && cbtn.getAttribute('aria-label')) || ''
+          ) + ' ' + (cbtn.textContent || '');
+          var label = combinedLabel.toLowerCase();
+          if (label.indexOf('send') !== -1 || label.indexOf('ask') !== -1) {
+            sendBtn = cbtn;
+            break;
+          }
         }
       }
       
@@ -2289,6 +2379,45 @@ function findAndClickAcceptButtons() {
           }
         }
       } catch (e) { /* cross-origin */ }
+    }
+  } catch (e) { /* ignore */ }
+
+  // Branch 3b: Browser JS injection permission card (workbench).
+  // Some IDEs show "Agent needs permission to execute JavaScript on <host>" with Deny/Allow buttons.
+  // This UI can live inside workbench panels that are otherwise forbidden zones; we allow ONLY this
+  // highly-specific case to avoid missing the primary "Allow" action.
+  try {
+    var rtCfg = getRuntimeConfig();
+    // Reuse clickAllowOnce as the opt-in gate for permission-style "Allow" actions.
+    if (rtCfg && rtCfg.clickAllowOnce) {
+      var permBtns = document.querySelectorAll('button');
+      for (var pb = 0; pb < permBtns.length; pb++) {
+        var pBtn = permBtns[pb];
+        if (checkedElements.has(pBtn)) continue;
+        var pText = getButtonText(pBtn);
+        if (pText !== 'allow') continue;
+        if (!isElementClickable(pBtn)) continue;
+        if (isInsideCodeOrProse(pBtn)) continue;
+        // Require the surrounding card to mention permission + execute javascript to avoid broad "Allow" clicks
+        var card = pBtn.parentElement;
+        var isBrowserJsPermission = false;
+        for (var cd = 0; cd < 20 && card; cd++) {
+          var cText = (card.textContent || '').toLowerCase();
+          if (cText.indexOf('permission') !== -1 && cText.indexOf('execute javascript') !== -1) {
+            isBrowserJsPermission = true;
+            break;
+          }
+          card = card.parentElement;
+        }
+        if (!isBrowserJsPermission) continue;
+        try {
+          pBtn.click();
+          clickedButtons.push(pText);
+          scanMode = scanMode === 'none' ? 'browser-js-permission' : scanMode + '+browser-js-permission';
+          checkedElements.add(pBtn);
+        } catch (e) { /* ignore */ }
+        break; // Avoid double-clicking if multiple similar buttons exist
+      }
     }
   } catch (e) { /* ignore */ }
 

@@ -1,8 +1,50 @@
 # Changelog
 
+## [1.0.7] — 2026-02-24
+
+### ✨ UX & Logic Refinements
+
+- **IDE-Aware CDP Detection** — Strengthened CDP port discovery so the extension only attaches to the correct IDE:
+  - `DevToolsActivePort` and `--remote-debugging-port` are now validated with **IDE-aware probes**.
+  - Rejects ports where all workbench pages clearly belong to a different IDE (e.g. attaching to Chrome instead of Cursor).
+  - Requires at least one workbench page whose title matches the current IDE (e.g. Cursor) before accepting a port.
+- **Antigravity / Cursor JS Payload Allowances** — Internal tuning of CDP target detection and payload injection so that:
+  - Antigravity and Cursor JS payloads are allowed to attach only to the correct workbench and webviews.
+  - Reduces the risk of accidentally scanning unrelated browser tabs or external Chrome instances.
+- **Dashboard Icon & Status Bar Entry** — Added a dedicated monochrome icon and quick access entry:
+  - New `icon-mono.svg` used in the Dashboard header for a clean, production-ready look.
+  - New status bar item `$(graph-line) Auto Accept` opens the Dashboard in one click.
+- **CDP Status in Dashboard** — Dashboard now shows live CDP connection state:
+  - `cdp:connected` with port and target count, `cdp:reconnecting` with attempt/delay, and `cdp:disconnected` reasons.
+  - Helps diagnose CDP issues (e.g., port conflicts) directly from the UI.
+- **Soft Watchdog Improvements (Follow-up)** — Polished messaging around soft mode and exclude patterns in README:
+  - Clear examples for adding long-running commands to `terminalWatchdog.excludePatterns`.
+  - Explicit documentation for `"domyh-auto-accept.terminalWatchdog.softMode": true` as a safe, non‑killing mode.
+
+---
+
+## [1.0.6] — 2026-02-24
+
+### 🐕 Terminal Watchdog — Beta Hardening
+
+- **Soft Mode (Never Kill Terminals)** — Added a conservative mode for sensitive environments:
+  - New setting: `"domyh-auto-accept.terminalWatchdog.softMode": true`.
+  - In soft mode, the watchdog uses **Enter → Ctrl+C** only and **never calls `killTerminal`**.
+  - Keeps protection against stuck stdin while avoiding disruptive terminal kills.
+- **Pre-Kill Safety Hint** — When the watchdog does kill a terminal in escalating mode:
+  - Logs a clear warning with the offending command.
+  - Shows a user message explaining how to add a substring of the command to `terminalWatchdog.excludePatterns`.
+  - Makes it easy to whitelist legitimate long-running tasks (e.g. custom CI commands).
+- **Config & Type Refinements** — Updated configuration types and readers:
+  - Extended `WatchdogConfig` with `softMode` and wired it through `ConfigReader`.
+  - Ensured status bar and Dashboard reflect watchdog runtime enabled/paused state accurately.
+- **Internal Logic Clean-Up** — Minor logic and typings improvements to keep the engine and watchdog code easier to maintain.
+
+---
+
 ## [1.0.5] — 2026-02-24
 
-### 🐕 Terminal Watchdog
+### 🐕 Terminal Watchdog (Beta Test)
 
 - **Terminal Stuck Detection** — Monitors terminal shell executions and automatically recovers from stuck commands
   - Tracks commands via `onDidStartTerminalShellExecution` / `onDidEndTerminalShellExecution` events

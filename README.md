@@ -1,41 +1,44 @@
 # Domyh Auto Accept
 
-> Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, and VS Code Copilot.
+> Production‑ready auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, and VS Code Copilot.
 
 ## ✨ Features
 
 | Feature | Description |
 |---------|-------------|
 | 🤖 **Auto-Accept** | Automatically clicks Accept, Accept All, Keep All, Run, Retry, and Continue buttons in AI panels |
-| 🎯 **Cursor Enhanced** | Full support for Cursor IDE: Keep All, Run terminal, web search Continue, error popup handling, MCP tool calls |
+| 🎯 **Cursor Enhanced** | First-class Cursor support: Keep All, terminal Run, web search Continue, error popup handling, MCP tool calls |
 | 🛡️ **Dangerous Command Blocking** | Blocks dangerous terminal commands (`rm -rf`, `format C:`, pipe-to-shell, fork bombs, etc.) with 25+ built-in patterns |
 | 🔄 **Death Loop Guard** | Detects infinite retry cycles (429, model overloaded, context window full) and pauses with configurable cooldown |
 | 📋 **Prompt Scheduler** | 3 modes: Interval, Daily, Queue — with silence detection and consume/loop queue behavior |
 | 📊 **Dashboard** | Live WebView dashboard with session stats, CDP status, queue progress, and activity log |
+| 📈 **Status Bar Shortcuts** | Click `Auto Accept: ...` to toggle engine, or `$(graph-line) Auto Accept` to open the dashboard instantly |
 | 🔌 **Multi-IDE** | Native adapter per IDE with IDE-specific commands, button selectors, and CDP target filtering |
 | ⚡ **Smart Focus** | Optional focus-based toggle: auto-accept ON in terminal, OFF in chat |
-| 🔍 **CDP Auto-Discovery** | 5-layer cascade: `DevToolsActivePort` → `argv.json` → process scan → port sweep → fallback |
+| 🔍 **CDP Auto-Discovery** | 5-layer cascade: `DevToolsActivePort` → `argv.json` → process scan → IDE-aware port sweep → fallback |
 | 📜 **Auto Scroll** | Automatically scrolls chat panel to bottom when new content appears |
 | 📜 **Antigravity Scroll** | User scroll detection: pauses auto-scroll/click when user scrolls up or drags scrollbar |
 | 🔧 **Probe Buttons** | Diagnostic command to find buttons without clicking (helps debug detection issues) |
 | ⚙️ **Runtime Config** | Instant toggle controls without window reload — toggle Run/Proceed/Accept All on the fly |
-| 🐕 **Terminal Watchdog(Beta Test)** | Detects stuck terminal commands and auto-recovers with escalating strategy (Enter → Ctrl+C → Kill) |
-| 🔄 **UI Mismatch Recovery** | Detects when terminal UI shows "Running command" but shell events indicate completion — auto-reloads terminal |
+| 🐕 **Terminal Watchdog (Beta)** | Detects stuck terminal commands and auto-recovers (Enter → Ctrl+C → Kill) with optional **soft mode** (never kill) |
+| 🔄 **UI Mismatch Recovery** | Detects when terminal UI shows "Running command" but shell events indicate completion — auto-reloads terminal (opt-in) |
 
 ## ⚡ Quick Start
 
-1. Install the `.vsix` extension
-2. Extension auto-starts with your IDE — no configuration needed
-3. Status bar shows `$(check) Auto Accept` when active
+1. Install the `.vsix` extension.
+2. Extension auto-starts with your IDE — no configuration needed for most setups.
+3. Status bar shows `$(check) Auto Accept` when active, plus a `$(graph-line) Auto Accept` button for the Dashboard.
 
-> **First run**: The extension patches `argv.json` with `"remote-debugging-port": 0` and prompts a restart. After restart, CDP is permanently enabled.
+> **First run & CDP setup**  
+> By default, the extension will attempt a one-time CDP setup by patching your IDE's `argv.json` and (where possible) updating user-level shortcuts to add `--remote-debugging-port`. A restart is required.  
+> If your environment forbids host file changes, set `"domyh-auto-accept.cdpSetup.mode": "manual"` to disable automatic `argv.json`/shortcut edits and configure CDP manually.
 
 ## 🎛️ Commands
 
 | Command | Keybinding | Description |
 |---------|------------|-------------|
 | `Domyh Auto Accept: Toggle On/Off` | `Ctrl+Shift+Alt+A` | Enable/disable auto-accept |
-| `Domyh Auto Accept: Open Dashboard` | `Ctrl+Shift+Alt+D` | Open live stats dashboard |
+| `Domyh Auto Accept: Open Dashboard` | `Ctrl+Shift+Alt+D` | Open live stats dashboard (also available via status bar icon) |
 | `Domyh Auto Accept: Probe Buttons` | — | Find buttons without clicking (debug tool) |
 | `Domyh Auto Accept: Start Prompt Queue` | — | Start scheduled prompt queue |
 | `Domyh Auto Accept: Pause/Resume/Skip/Stop Queue` | — | Control prompt queue |
@@ -54,6 +57,8 @@
   // Core
   "domyh-auto-accept.enabled": true,
   "domyh-auto-accept.cdpPort": 0,           // 0 = auto-detect (recommended)
+  // CDP setup mode: "auto" (patch argv.json + shortcuts where possible) or "manual" (no host changes)
+  "domyh-auto-accept.cdpSetup.mode": "auto",
   "domyh-auto-accept.pollFrequency": 800,   // ms (200-5000)
   "domyh-auto-accept.bannedCommands": [],    // Additional blocked patterns (regex)
   "domyh-auto-accept.smartFocus": false,     // Focus-based toggle
@@ -116,7 +121,7 @@
 - **Chat Scrolled Up**: Does not auto-scroll/click when chat is scrolled up (user reading history)
 - **Multi-Window**: Scroll detection works in chat panel iframe
 
-## 🐕 Terminal Watchdog(Beta Test)
+## 🐕 Terminal Watchdog (Beta)
 
 The Terminal Watchdog monitors terminal shell executions and automatically recovers from stuck commands, which is especially useful when AI agents run terminal commands that hang due to ConPTY/stdin issues on Windows.
 
@@ -133,7 +138,7 @@ The Terminal Watchdog monitors terminal shell executions and automatically recov
    - **Stage 3**: Kill terminal + notify user
 4. **Ephemeral Commands**: Automatically ignores short-lived commands (`cd`, `ls`, `dir`, `pwd`, `cls`, `clear`)
 5. **Exclude Patterns**: Long-running commands are excluded (dev servers, `docker`, `ssh`, `tail -f`, etc.)
-6. **REQUIRE**: It can be combined with the domyh-awf(https://github.com/nockasdd/domyh-awf-code) system to improve performance. Currently, this is a test version to reduce terminal hangs. If a terminal hang is detected, it will perform operations to reload the terminal kernel.
+6. **Optional AWF Integration**: Can be combined with the domyh‑awf system ([github.com/nockasdd/domyh-awf-code](https://github.com/nockasdd/domyh-awf-code)) to improve performance. In this extension it focuses on reducing terminal hangs; when a hang is detected, it can reload the terminal kernel.
 ### UI Mismatch Recovery (Opt-in)
 
 When enabled, the watchdog can detect cases where:
@@ -218,9 +223,20 @@ This allows fine-grained control over which buttons are auto-clicked without res
 ### Terminal Watchdog Issues
 
 - **False Positives**: Adjust timeout values or add commands to `excludePatterns`
-- **Watchdog Too Aggressive**: Use `recoveryStrategy: "enter-only"` for gentler recovery
+- **Watchdog Too Aggressive**: Use `recoveryStrategy: "enter-only"` or enable `"domyh-auto-accept.terminalWatchdog.softMode": true` to never kill terminals (only Enter/Ctrl+C)
 - **Terminal Reloads Too Often**: Disable `uiMismatchRecovery.enabled` if not needed
 - **Commands Not Tracked**: Check logs for "Ignoring ephemeral command" or "Skipping excluded command"
+
+If a specific long-running command (e.g., a custom CI task) is being killed and you want to opt it out of monitoring entirely, add a substring of that command to `excludePatterns`. For example:
+
+```jsonc
+{
+  "domyh-auto-accept.terminalWatchdog.excludePatterns": [
+    "docker compose up",
+    "my-custom-long-task"
+  ]
+}
+```
 
 ## 📊 Architecture
 

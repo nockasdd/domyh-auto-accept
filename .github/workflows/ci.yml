@@ -32,7 +32,7 @@ jobs:
         run: npm run lint --if-present
 
       - name: Security audit
-        run: npm audit --audit-level=high || true
+        run: npm audit --production --audit-level=high || true
 
       - name: Test
         run: npx vitest run

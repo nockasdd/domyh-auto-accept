@@ -2,7 +2,7 @@
   "name": "domyh-auto-accept",
   "displayName": "Domyh Auto Accept",
   "description": "Professional auto-accept extension for AI coding assistants — supports Antigravity, Cursor, Windsurf, Trae, VS Code Copilot",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "publisher": "nockasdd",
   "icon": "resources/icons/icon.png",
   "license": "MIT",
@@ -95,6 +95,18 @@
         "title": "Domyh Auto Accept: Toggle Auto-click Accept All"
       },
       {
+        "command": "domyh-auto-accept.toggleClickAllowOnce",
+        "title": "Domyh Auto Accept: Toggle Auto-click Allow Once"
+      },
+      {
+        "command": "domyh-auto-accept.toggleClickAllowConversation",
+        "title": "Domyh Auto Accept: Toggle Auto-click Allow Conversation"
+      },
+      {
+        "command": "domyh-auto-accept.toggleClickSend",
+        "title": "Domyh Auto Accept: Toggle Auto-click Send"
+      },
+      {
         "command": "domyh-auto-accept.watchdog.pause",
         "title": "Domyh Auto Accept: Pause Terminal Watchdog"
       },
@@ -115,6 +127,15 @@
           "type": "number",
           "default": 0,
           "description": "CDP port (0 = auto-detect from IDE)"
+        },
+        "domyh-auto-accept.cdpSetup.mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "default": "auto",
+          "description": "CDP setup mode: auto (patch argv.json + shortcuts where possible) or manual (no host file changes, use existing CDP only)"
         },
         "domyh-auto-accept.pollFrequency": {
           "type": "number",
@@ -236,6 +257,11 @@
           "type": "number",
           "default": 600,
           "description": "Timeout for heavy install/build commands (seconds)"
+        },
+        "domyh-auto-accept.terminalWatchdog.softMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Soft mode: never kill terminals, only send Enter/Ctrl+C when commands appear stuck"
         },
         "domyh-auto-accept.terminalWatchdog.recoveryStrategy": {
           "type": "string",

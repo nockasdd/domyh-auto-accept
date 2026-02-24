@@ -158,13 +158,13 @@ export class IDEDetector {
     // Layer 1: DevToolsActivePort (canonical source when port=0)
     // With auto-pick, this file contains the actual port Chromium chose
     const dtapPort = this.readDevToolsActivePort(ideType);
-    if (dtapPort && dtapPort > 0 && await this.probeCDP(dtapPort)) {
+    if (dtapPort && dtapPort > 0 && await this.probeForIDE(dtapPort, ideType)) {
       return { port: dtapPort, source: 'DevToolsActivePort', validated: true };
     }
 
     // Layer 2: process.argv (useful if IDE was launched with a fixed port)
     const argvPort = this.getActiveCDPPort();
-    if (argvPort && argvPort > 0 && await this.probeCDP(argvPort)) {
+    if (argvPort && argvPort > 0 && await this.probeForIDE(argvPort, ideType)) {
       return { port: argvPort, source: 'process.argv', validated: true };
     }
 
@@ -280,29 +280,41 @@ export class IDEDetector {
               resolve(false);
               return;
             }
-            // Build list of OTHER IDE names to reject
+            // Build list of IDE names for positive & negative matching
             const allIDENames = ['antigravity', 'cursor', 'windsurf', 'trae', 'vscode', 'code'];
             const ourName = ideType.toLowerCase();
             const otherNames = allIDENames.filter(n => n !== ourName && n !== 'code');
 
-            // Check page-type targets for IDE identity
+            // Check page-type targets for IDE identity (must be workbench-like URL)
             const pageTargets = parsed.filter(
               (t: { type?: string; url?: string }) =>
                 t.type === 'page' && t.url && (t.url as string).includes('workbench'),
             );
             if (pageTargets.length === 0) {
-              // No workbench pages — could be webview-only, accept cautiously
-              resolve(true);
+              // No workbench pages → not a VS Code-based IDE workbench
+              resolve(false);
               return;
             }
-            // If ANY workbench page title contains ANOTHER IDE's name → wrong IDE
+
+            // Reject if ANY workbench page title clearly belongs to another IDE
             const hasOtherIDE = pageTargets.some(
               (t: { title?: string }) =>
                 otherNames.some(name =>
                   (t.title || '').toLowerCase().includes(name),
                 ),
             );
-            resolve(!hasOtherIDE);
+            if (hasOtherIDE) {
+              resolve(false);
+              return;
+            }
+
+            // Require at least one workbench page that looks like OUR IDE
+            const ourMatch = pageTargets.some(
+              (t: { title?: string }) =>
+                (t.title || '').toLowerCase().includes(ourName),
+            );
+
+            resolve(ourMatch);
           } catch {
             resolve(false);
           }

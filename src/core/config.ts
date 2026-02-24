@@ -22,6 +22,7 @@ export class ConfigReader {
     return {
       enabled: this.config.get<boolean>('enabled', true),
       cdpPort: this.config.get<number>('cdpPort', 0),
+      cdpSetupMode: this.config.get<'auto' | 'manual'>('cdpSetup.mode', 'auto'),
       pollFrequency: this.config.get<number>('pollFrequency', 800),
       bannedCommands: this.config.get<string[]>('bannedCommands', []),
       autoAllowOutsideWorkspace: this.config.get<boolean>('autoAllowOutsideWorkspace', false),
@@ -85,6 +86,7 @@ export class ConfigReader {
           'vite dev',
         ],
       ),
+      softMode: this.config.get<boolean>('terminalWatchdog.softMode', false),
       uiMismatchRecoveryEnabled: this.config.get<boolean>(
         'terminalWatchdog.uiMismatchRecovery.enabled',
         false,

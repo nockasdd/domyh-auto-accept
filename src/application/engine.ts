@@ -146,6 +146,12 @@ export class AutoAcceptEngine {
       this.setState(EngineState.Connected);
       this.logger.info(`CDP connected on port ${port}`);
 
+      // Notify dashboard about CDP connection
+      this.eventBus.emit('cdp:connected', {
+        port,
+        targets: this.cdp.connectionCount,
+      });
+
       // Push the latest runtime config to all targets as early as possible
       // so that auto-accept.js reads correct values on first injection.
       await this.pushRuntimeConfigToAllTargets();
@@ -168,8 +174,14 @@ export class AutoAcceptEngine {
       // Start polling
       this.startPolling();
       this.startupGracePollsRemaining = AutoAcceptEngine.STARTUP_GRACE_POLLS;
-    } catch {
-      this.logger.warn(`CDP not available on port ${port} — running Commands API only`);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`CDP not available on port ${port} — running Commands API only (${reason})`);
+
+      // Notify dashboard about CDP failure
+      this.eventBus.emit('cdp:disconnected', {
+        reason: `CDP not available on port ${port}: ${reason}`,
+      });
 
       // NOTE: CDP setup (argv.json + shortcut modification) is handled ONLY
       // in extension.ts with persistent globalState guard.
@@ -404,6 +416,12 @@ export class AutoAcceptEngine {
       this.logger.info(`CDP retry timer started (backoff from ${delay / 1000}s, max ${AutoAcceptEngine.CDP_RETRY_MAX} attempts)`);
     }
 
+    // Inform dashboard that we are scheduling a reconnect attempt
+    this.eventBus.emit('cdp:reconnecting', {
+      attempt: this.cdpRetryAttempt + 1,
+      delay,
+    });
+
     this.cdpRetryTimer = setTimeout(async () => {
       this.cdpRetryAttempt++;
 
@@ -608,8 +626,8 @@ export class AutoAcceptEngine {
       '(function(){' +
       'try{' +
       'var cfg=' + json + ';' +
-      'if(typeof window!==\"undefined\"){' +
-      'if(window.__autoAcceptConfig&&typeof window.__autoAcceptConfig===\"object\"){' +
+      'if(typeof window!=="undefined"){' +
+      'if(window.__autoAcceptConfig&&typeof window.__autoAcceptConfig==="object"){' +
       'for(var k in cfg){if(Object.prototype.hasOwnProperty.call(cfg,k)){window.__autoAcceptConfig[k]=cfg[k];}}' +
       '}else{' +
       'window.__autoAcceptConfig=cfg;' +
@@ -924,6 +942,10 @@ export class AutoAcceptEngine {
           // DON'T stop polling — Commands API still works
           // CDP will auto-reconnect via scheduleReconnect()
         }
+        // Emit dashboard event for disconnection if we previously had a port
+        this.eventBus.emit('cdp:disconnected', {
+          reason: 'CDP disconnected',
+        });
         break;
       case ConnectionState.Reconnecting:
         this.setState(EngineState.Reconnecting);

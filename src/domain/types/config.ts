@@ -11,6 +11,12 @@ export interface ExtensionConfig {
   readonly enabled: boolean;
   readonly cdpPort: number;
   readonly pollFrequency: number;
+  /**
+   * CDP setup mode:
+   * - "auto": patch argv.json + shortcuts where possible (current default behavior)
+   * - "manual": do not modify host files, only use existing CDP configuration
+   */
+  readonly cdpSetupMode: 'auto' | 'manual';
   readonly bannedCommands: string[];
   readonly autoAllowOutsideWorkspace: boolean;
   readonly smartFocus: boolean;

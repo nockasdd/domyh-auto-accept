@@ -32,7 +32,9 @@ const STATE_COLORS: Record<string, vscode.ThemeColor | undefined> = {
 
 export class StatusBar {
   private readonly item: vscode.StatusBarItem;
+  private readonly dashboardItem: vscode.StatusBarItem;
   private readonly disposables = new DisposableStore();
+  private watchdogPollTimer: ReturnType<typeof setInterval> | null = null;
   private clicks = 0;
   private queueInfo: { index: number; total: number } | null = null;
   private watchdogEnabled = true;
@@ -43,12 +45,16 @@ export class StatusBar {
     runtimeConfigService?: RuntimeConfigService,
     watchdog?: TerminalWatchdog,
   ) {
-    this.item = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Right,
-      100,
-    );
+    // Main status item: shows engine state & stats, toggles engine on click
+    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.item.command = 'domyh-auto-accept.toggle';
     this.item.tooltip = 'Domyh Auto Accept — Click to toggle';
+
+    // Secondary item: quick entry to open dashboard
+    this.dashboardItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    this.dashboardItem.text = '$(graph-line) Auto Accept';
+    this.dashboardItem.tooltip = 'Domyh Auto Accept — Open Dashboard';
+    this.dashboardItem.command = 'domyh-auto-accept.openDashboard';
 
     // Subscribe to events
     this.disposables.add(
@@ -84,7 +90,7 @@ export class StatusBar {
     if (watchdog) {
       this.watchdogEnabled = watchdog.isRuntimeEnabled();
       // Note: Watchdog doesn't emit events, so we track it via periodic check
-      setInterval(() => {
+      this.watchdogPollTimer = setInterval(() => {
         const newState = watchdog.isRuntimeEnabled();
         if (newState !== this.watchdogEnabled) {
           this.watchdogEnabled = newState;
@@ -114,6 +120,7 @@ export class StatusBar {
 
     this.updateState(EngineState.Idle);
     this.item.show();
+    this.dashboardItem.show();
   }
 
   private currentState = EngineState.Idle;
@@ -177,7 +184,12 @@ export class StatusBar {
   }
 
   dispose(): void {
+    if (this.watchdogPollTimer) {
+      clearInterval(this.watchdogPollTimer);
+      this.watchdogPollTimer = null;
+    }
     this.item.dispose();
+    this.dashboardItem.dispose();
     this.disposables.dispose();
   }
 }

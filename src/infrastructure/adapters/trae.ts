@@ -5,7 +5,7 @@
  * - trae.accept for accepting AI suggestions
  * - Builder mode "Accept All" / "Approve" buttons
  * - ByteDance LLM integration (GPT-4o / Claude 3.5 Sonnet)
- * - CDP port 9226
+ * - CDP port 9005
  */
 
 import { BaseIDEAdapter } from './base-adapter';
@@ -70,9 +70,9 @@ export class TraeAdapter extends BaseIDEAdapter {
       (t) =>
         t.webSocketDebuggerUrl &&
         (t.type === 'webview' ||
-         t.type === 'iframe' ||
-         (t.type === 'page' &&
-          (t.url.includes('workbench') || t.title.includes('Trae')))),
+          t.type === 'iframe' ||
+          (t.type === 'page' &&
+            (t.url.includes('workbench') || t.title.includes('Trae')))),
     );
   }
 }

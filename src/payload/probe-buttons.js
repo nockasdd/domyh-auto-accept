@@ -58,6 +58,23 @@ function getButtonText(el) {
   try {
     // Priority 1: aria-label
     text = el.getAttribute('aria-label') || '';
+    // CRITICAL: Prefer DIRECT text nodes of the element (e.g. <button>Allow<span>Alt+⏎</span></button>)
+    // This avoids mis-reading the shortcut span ("Alt+⏎") as the button label.
+    if (!text) {
+      try {
+        var directTextParts = [];
+        for (var dn = 0; dn < (el.childNodes ? el.childNodes.length : 0); dn++) {
+          var node = el.childNodes[dn];
+          if (node && node.nodeType === 3) { // TEXT_NODE
+            var t = (node.textContent || '').trim();
+            if (t) directTextParts.push(t);
+          }
+        }
+        if (directTextParts.length > 0) {
+          text = directTextParts.join(' ');
+        }
+      } catch (e) { /* ignore */ }
+    }
     // Priority 2: first direct span child (for structured buttons)
     if (!text) {
       var directSpans = el.querySelectorAll(':scope > span');

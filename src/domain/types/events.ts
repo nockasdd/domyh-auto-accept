@@ -14,7 +14,7 @@ export interface EventMap {
   'engine:commandBlocked': { command: string; pattern: string };
   'engine:statsUpdated': SessionStats;
   'engine:deathLoopDetected': { retryCount: number; windowSeconds: number };
-  'engine:deathLoopReset': void;
+  'engine:deathLoopReset': undefined;
 
   // CDP connection events
   'cdp:connected': { port: number; targets: number };
@@ -44,5 +44,13 @@ export interface EventMap {
   'runtimeConfig:changed': {
     old: import('./auto-accept-config').AutoAcceptRuntimeConfig;
     new: import('./auto-accept-config').AutoAcceptRuntimeConfig;
+  };
+
+  // Terminal watchdog events
+  'watchdog:activity': {
+    stage: 'stuck-detected' | 'enter' | 'ctrlc' | 'kill' | 'ui-mismatch';
+    terminalName: string;
+    commandLine: string;
+    elapsedMs?: number;
   };
 }

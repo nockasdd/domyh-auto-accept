@@ -69,7 +69,10 @@ export class DashboardPanel {
       },
     );
 
-    panel.webview.html = DashboardPanel.getHtmlContent(panel.webview);
+    panel.webview.html = DashboardPanel.getHtmlContent(
+      panel.webview,
+      extensionUri,
+    );
     DashboardPanel.instance = new DashboardPanel(panel, eventBus, runtimeConfigService, watchdog);
 
     // Push initial state after a brief delay to let webview initialize
@@ -104,6 +107,8 @@ export class DashboardPanel {
         clickAllowConversation: config.clickAllowConversation,
         clickSend: config.clickSend,
         enabled: config.enabled,
+        bannedCommands: config.bannedCommands,
+        dangerousCommands: config.dangerousCommands,
       },
     });
   }
@@ -176,6 +181,34 @@ export class DashboardPanel {
       }),
     );
 
+    // Watchdog activity → WebView activity log
+    this.disposables.add(
+      this.eventBus.on('watchdog:activity', (info) => {
+        const prefix = '🐕 Watchdog: ';
+        let msg: string;
+        switch (info.stage) {
+          case 'stuck-detected':
+            msg = `${prefix}STUCK "${info.commandLine}" in ${info.terminalName}` +
+              (info.elapsedMs ? ` (${Math.round(info.elapsedMs / 1000)}s)` : '');
+            break;
+          case 'enter':
+            msg = `${prefix}Sent Enter for "${info.commandLine}" in ${info.terminalName}`;
+            break;
+          case 'ctrlc':
+            msg = `${prefix}Sent Ctrl+C for "${info.commandLine}" in ${info.terminalName}`;
+            break;
+          case 'ui-mismatch':
+            msg = `${prefix}UI mismatch recovery for "${info.commandLine}" in ${info.terminalName}`;
+            break;
+          case 'kill':
+          default:
+            msg = `${prefix}Killed terminal for "${info.commandLine}" in ${info.terminalName}`;
+            break;
+        }
+        this.panel.webview.postMessage({ type: 'activity', data: { event: msg } });
+      }),
+    );
+
     // Command blocked → WebView (now implemented in engine.ts)
     this.disposables.add(
       this.eventBus.on('engine:commandBlocked', (info: { command: string; pattern: string }) => {
@@ -201,7 +234,7 @@ export class DashboardPanel {
     // WebView → Extension (user actions)
     this.disposables.add(
       this.panel.webview.onDidReceiveMessage(
-        (msg: { type: string; action?: string }) => {
+        (msg: { type: string; action?: string; commands?: string[] }) => {
           switch (msg.type) {
             case 'toggle':
               vscode.commands.executeCommand('domyh-auto-accept.toggle');
@@ -240,6 +273,16 @@ export class DashboardPanel {
             case 'openSettings':
               vscode.commands.executeCommand('workbench.action.openSettings', 'domyh-auto-accept');
               break;
+            case 'updateBannedCommands':
+              if (Array.isArray(msg.commands)) {
+                const config = vscode.workspace.getConfiguration('domyh-auto-accept');
+                void config.update(
+                  'bannedCommands',
+                  msg.commands,
+                  vscode.ConfigurationTarget.Workspace,
+                );
+              }
+              break;
           }
         },
       ),
@@ -248,14 +291,17 @@ export class DashboardPanel {
 
   // ── HTML Content ─────────────────────────────────
 
-  private static getHtmlContent(_webview: vscode.Webview): string {
+  private static getHtmlContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+    const iconUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(extensionUri, 'resources', 'icons', 'icon-mono.svg'),
+    );
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    content="default-src 'none'; img-src 'self' data: vscode-resource: https: vscode-webview-resource:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
   <title>Domyh Auto Accept — Dashboard</title>
   <style>
     :root {
@@ -512,6 +558,20 @@ export class DashboardPanel {
     }
     .btn.primary:hover { opacity: 0.9; }
 
+    /* Textareas for patterns */
+    .code-input {
+      width: 100%;
+      min-height: 70px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--fg);
+      padding: 6px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+      resize: vertical;
+    }
+
     /* Activity Log */
     .log-list { 
       list-style: none; 
@@ -551,12 +611,64 @@ export class DashboardPanel {
         grid-template-columns: 1fr;
       }
     }
+
+    /* Settings layout with vertical tabs */
+    .settings-layout {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    @media (max-width: 700px) {
+      .settings-layout {
+        grid-template-columns: 1fr;
+      }
+      .tab-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+    }
+    .tab-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .tab-button {
+      padding: 6px 8px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      cursor: pointer;
+      text-align: left;
+      font-size: 12px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .tab-button:hover {
+      background: var(--border);
+    }
+    .tab-button.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #1e1e2e;
+      font-weight: 600;
+    }
+    .tab-content {
+      min-height: 120px;
+    }
+    .tab-panel {
+      display: none;
+    }
+    .tab-panel.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
   <!-- Header -->
   <div class="header">
-    <h1>⚡ Domyh Auto Accept</h1>
+    <h1><img src="${iconUri}" alt="Auto Accept" style="width:16px;height:16px;border-radius:3px;"> Domyh Auto Accept</h1>
     <div class="header-right">
       <button class="icon-btn" onclick="send('toggle')" title="Toggle Engine On/Off" id="toggleBtn">▶</button>
       <button class="icon-btn" onclick="send('openSettings')" title="Open Settings">⚙</button>
@@ -621,53 +733,112 @@ export class DashboardPanel {
     </div>
   </div>
 
-  <!-- Runtime Config & Watchdog -->
-  <div class="two-col">
-    <!-- Runtime Config -->
-    <div class="section">
-      <div class="section-title">⚙️ Runtime Config</div>
-      <div class="info-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggleRun" onchange="toggleRuntime('Run')">
-          <span class="slider"></span>
-          <span class="label">Run</span>
-        </label>
-      </div>
-      <div class="info-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggleProceed" onchange="toggleRuntime('Proceed')">
-          <span class="slider"></span>
-          <span class="label">Proceed</span>
-        </label>
-      </div>
-      <div class="info-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggleAcceptAll" onchange="toggleRuntime('AcceptAll')">
-          <span class="slider"></span>
-          <span class="label">Accept All</span>
-        </label>
-      </div>
-      <div class="info-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggleAllowOnce" onchange="toggleRuntime('AllowOnce')">
-          <span class="slider"></span>
-          <span class="label">Allow Once</span>
-        </label>
-      </div>
+  <!-- Settings with Tabs -->
+  <div class="settings-layout">
+    <div class="tab-nav">
+      <button class="tab-button active" data-tab="runtime" onclick="setActiveTab('runtime')">Runtime</button>
+      <button class="tab-button" data-tab="safety" onclick="setActiveTab('safety')">Safety</button>
+      <button class="tab-button" data-tab="scheduler" onclick="setActiveTab('scheduler')">Scheduler</button>
     </div>
+    <div class="tab-content">
+      <!-- Runtime Tab -->
+      <div class="tab-panel active" data-tab="runtime">
+        <div class="two-col">
+          <!-- Runtime Config -->
+          <div class="section">
+            <div class="section-title">⚙️ Runtime Config</div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleRun" onchange="toggleRuntime('Run')">
+                <span class="slider"></span>
+                <span class="label">Run</span>
+              </label>
+            </div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleProceed" onchange="toggleRuntime('Proceed')">
+                <span class="slider"></span>
+                <span class="label">Proceed</span>
+              </label>
+            </div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleAcceptAll" onchange="toggleRuntime('AcceptAll')">
+                <span class="slider"></span>
+                <span class="label">Accept All</span>
+              </label>
+            </div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleAllowOnce" onchange="toggleRuntime('AllowOnce')">
+                <span class="slider"></span>
+                <span class="label">Allow Once</span>
+              </label>
+            </div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleAllowConversation" onchange="toggleRuntime('AllowConversation')">
+                <span class="slider"></span>
+                <span class="label">Allow Conversation</span>
+              </label>
+            </div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleSend" onchange="toggleRuntime('Send')">
+                <span class="slider"></span>
+                <span class="label">Send</span>
+              </label>
+            </div>
+          </div>
 
-    <!-- Watchdog -->
-    <div class="section">
-      <div class="section-title">🐕 Terminal Watchdog(Beta Test)</div>
-      <div class="info-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggleWatchdog" onchange="toggleWatchdog()">
-          <span class="slider"></span>
-          <span class="label">Enabled</span>
-        </label>
+          <!-- Watchdog -->
+          <div class="section">
+            <div class="section-title">🐕 Terminal Watchdog(Beta Test)</div>
+            <div class="info-row">
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleWatchdog" onchange="toggleWatchdog()">
+                <span class="slider"></span>
+                <span class="label">Enabled</span>
+              </label>
+            </div>
+            <div class="info-row" style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+              Monitors terminal commands and recovers from stuck processes
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="info-row" style="font-size: 11px; color: var(--muted); margin-top: 8px;">
-        Monitors terminal commands and recovers from stuck processes
+
+      <!-- Safety Tab -->
+      <div class="tab-panel" data-tab="safety">
+        <div class="section">
+          <div class="section-title">🛡 Command Safety</div>
+          <div class="info-row" style="font-size: 11px; color: var(--muted); flex-direction: column; align-items: flex-start;">
+            <span>Built-in dangerous patterns (rm -rf, format C:, curl | sh, ...) are always blocked.</span>
+            <span>You can add extra <strong>banned commands</strong> here (regex, one per line). Invalid regex will be ignored safely.</span>
+          </div>
+          <div class="info-row" style="flex-direction: column; align-items: flex-start; margin-top: 6px;">
+            <span class="info-label" style="min-width: auto; font-size: 11px; color: var(--muted);">Banned command patterns (regex):</span>
+            <textarea id="bannedCommandsInput" class="code-input" placeholder="^rm\\s+-rf\\b\nshutdown\\b\ncurl\\s+.+\\|\\s*(sh|bash)"></textarea>
+          </div>
+          <div class="btn-row" style="margin-top:8px;">
+            <button class="btn primary" onclick="saveBannedCommands()">Save Banned Commands</button>
+            <button class="btn" onclick="send('openSettings')">Open Safety Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scheduler Tab -->
+      <div class="tab-panel" data-tab="scheduler">
+        <div class="section">
+          <div class="section-title">⏱ Scheduler</div>
+          <div class="info-row" style="font-size: 11px; color: var(--muted);">
+            Configure interval/daily/queue modes, prompt list, and silence detection timeout in settings.
+          </div>
+          <div class="btn-row" style="margin-top:8px;">
+            <button class="btn" onclick="send('startQueue')">▶ Start Queue</button>
+            <button class="btn" onclick="send('openSettings')">Open Scheduler Settings</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -693,6 +864,33 @@ export class DashboardPanel {
     }
     function toggleWatchdog() {
       send('toggleWatchdog');
+    }
+
+    function setActiveTab(id) {
+      const buttons = document.querySelectorAll('.tab-button');
+      const panels = document.querySelectorAll('.tab-panel');
+      buttons.forEach((btn) => {
+        if (btn.getAttribute('data-tab') === id) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+      panels.forEach((panel) => {
+        if (panel.getAttribute('data-tab') === id) {
+          panel.classList.add('active');
+        } else {
+          panel.classList.remove('active');
+        }
+      });
+    }
+
+    function saveBannedCommands() {
+      const el = document.getElementById('bannedCommandsInput');
+      if (!el) return;
+      const lines = el.value.split(/\\r?\\n/);
+      const commands = lines.map((s) => s.trim()).filter((s) => s.length > 0);
+      vscode.postMessage({ type: 'updateBannedCommands', commands });
     }
 
     let sessionStart = 0;
@@ -809,6 +1007,18 @@ export class DashboardPanel {
           }
           if (data.clickAllowOnce !== undefined) {
             document.getElementById('toggleAllowOnce').checked = data.clickAllowOnce;
+          }
+          if (data.clickAllowConversation !== undefined) {
+            document.getElementById('toggleAllowConversation').checked = data.clickAllowConversation;
+          }
+          if (data.clickSend !== undefined) {
+            document.getElementById('toggleSend').checked = data.clickSend;
+          }
+          if (Array.isArray(data.bannedCommands)) {
+            var bannedEl = document.getElementById('bannedCommandsInput');
+            if (bannedEl) {
+              bannedEl.value = data.bannedCommands.join('\\n');
+            }
           }
           break;
         }

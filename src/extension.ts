@@ -47,7 +47,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const fullConfig = config.getAll();
 
   logger.setDebugMode(fullConfig.debugMode);
-  logger.info('Domyh Auto Accept v1.0.2 activating...');
+  const extensionPkg = require('../package.json') as { version: string };
+  logger.info(`Domyh Auto Accept v${extensionPkg.version} activating...`);
 
   // Register core services in IoC
   container.register(Tokens.Logger, () => logger);
@@ -65,12 +66,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   //   - Popup prompt: shown ONCE via cdpPromptShown flag
   {
     const { Relauncher } = await import('./infrastructure/cdp/relauncher');
+    const cdpSetupMode = fullConfig.cdpSetupMode ?? 'auto';
     const port = detection.defaultPort;
     const relauncher = new Relauncher(logger, port);
     const hasCDPFlag = relauncher.hasFlag();
     logger.info(`CDP setup: hasFlag=${hasCDPFlag}, argv=[${process.argv.filter(a => a.startsWith('--remote')).join(', ') || 'none'}]`);
 
-    if (hasCDPFlag) {
+    if (cdpSetupMode === 'manual') {
+      if (hasCDPFlag) {
+        logger.info('CDP setup: mode=manual — IDE already has --remote-debugging-port flag ✓ (no host changes performed)');
+      } else {
+        logger.info(
+          'CDP setup: mode=manual — IDE does not have --remote-debugging-port flag. ' +
+          'Auto Accept will use Commands API and any manually configured CDP only. ' +
+          'See README for manual CDP configuration instructions.',
+        );
+      }
+    } else if (hasCDPFlag) {
       logger.info('CDP setup: IDE has --remote-debugging-port flag ✓');
     } else {
       // Always patch argv.json (idempotent — only writes if not already set)
@@ -184,7 +196,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   disposables.add(runtimeConfigService);
 
   // ── 5d. Start terminal watchdog (Windows terminal hang protection) ──
-  const watchdog = new TerminalWatchdog(fullConfig.terminalWatchdog, logger);
+  const watchdog = new TerminalWatchdog(fullConfig.terminalWatchdog, logger, eventBus);
   watchdog.start();
   disposables.add(watchdog);
 
@@ -456,6 +468,30 @@ function registerCommands(
     runtimeConfigService.update({ clickAcceptAll: !current.clickAcceptAll });
     vscode.window.showInformationMessage(
       `Auto-click "Accept All": ${!current.clickAcceptAll ? 'ON ✅' : 'OFF ❌'}`,
+    );
+  });
+
+  register('domyh-auto-accept.toggleClickAllowOnce', () => {
+    const current = runtimeConfigService.get();
+    runtimeConfigService.update({ clickAllowOnce: !current.clickAllowOnce });
+    vscode.window.showInformationMessage(
+      `Auto-click "Allow once": ${!current.clickAllowOnce ? 'ON ✅' : 'OFF ❌'}`,
+    );
+  });
+
+  register('domyh-auto-accept.toggleClickAllowConversation', () => {
+    const current = runtimeConfigService.get();
+    runtimeConfigService.update({ clickAllowConversation: !current.clickAllowConversation });
+    vscode.window.showInformationMessage(
+      `Auto-click "Allow this conversation": ${!current.clickAllowConversation ? 'ON ✅' : 'OFF ❌'}`,
+    );
+  });
+
+  register('domyh-auto-accept.toggleClickSend', () => {
+    const current = runtimeConfigService.get();
+    runtimeConfigService.update({ clickSend: !current.clickSend });
+    vscode.window.showInformationMessage(
+      `Auto-click "Send": ${!current.clickSend ? 'ON ✅' : 'OFF ❌'}`,
     );
   });
 }

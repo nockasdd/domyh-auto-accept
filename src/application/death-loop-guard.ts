@@ -19,7 +19,7 @@ export class DeathLoopGuard {
     private readonly config: AutoRetryConfig,
     private readonly eventBus: IEventBus,
     private readonly logger: Logger,
-  ) {}
+  ) { }
 
   /** Record a retry attempt. Returns true if retry is allowed. */
   recordRetry(): boolean {
@@ -64,7 +64,7 @@ export class DeathLoopGuard {
       clearTimeout(this.cooldownTimer);
       this.cooldownTimer = null;
     }
-    this.eventBus.emit('engine:deathLoopReset', undefined as never);
+    this.eventBus.emit('engine:deathLoopReset', undefined);
     this.logger.info('Death loop guard reset');
   }
 
@@ -98,7 +98,7 @@ export class DeathLoopGuard {
       this.retryTimestamps = [];
       this.consecutiveErrors = 0;
       this.logger.info('Death loop cooldown expired. Auto-retry resumed.');
-      this.eventBus.emit('engine:deathLoopReset', undefined as never);
+      this.eventBus.emit('engine:deathLoopReset', undefined);
     }, this.config.cooldownSeconds * 1000);
   }
 }
